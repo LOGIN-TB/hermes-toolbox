@@ -27,15 +27,40 @@ const appSource = fs.readFileSync('skills/gym/assets/web/app.js', 'utf8');
 vm.runInThisContext(`${appSource}\nglobalThis.__gymPilotTest = {
   selectView, exerciseCard, volumeChart, historyRows,
   resolveDashboardSnapshot, dashboardStatusText, fetchLiveDashboard, createDashboardStore, createIndexedDbDriver,
-  updateDashboardStatus, clearDashboardSnapshot,
+  updateDashboardStatus, clearDashboardSnapshot, validDashboardSnapshot,
   setUnits: value => { displayUnits = value; }
 };`);
 
+const routineSummary = {
+  id: 7, name: 'Beine', weekdays: [5],
+  exercises: [{name: 'Beinpresse', planned_sets: 3, min_reps: 8, max_reps: 12}],
+};
+const routineDetail = {
+  ...routineSummary,
+  last_comparable_session_date: '2026-08-01',
+  exercises: [{
+    ...routineSummary.exercises[0],
+    current_progress: {completed_sets: 0, planned_sets: 3},
+    last_sets: [{set_number: 1, weight_kg: 80, reps: 10, equipment_alias: ''}],
+    current_sets: [],
+  }],
+};
+const todayData = {
+  profile: {units: 'metric'}, plan: [routineSummary], routine: routineDetail,
+  weekday: 6, active_session: null,
+};
 const liveData = {
   health: {status: 'ok', auth_required: false},
-  today: {profile: {units: 'metric'}, plan: [{id: 7}], routine: null},
-  overview: {date: '2026-08-08'},
-  routines: {'7': {routine: {id: 7, name: 'Beine'}}},
+  today: todayData,
+  overview: {
+    date: '2026-08-08',
+    this_week: {sessions: 1, sets: 3, reps: 30, volume: 2400},
+    totals: {sessions: 8, sets: 24, reps: 240, volume: 19200},
+    next_routine: {name: 'Beine', weekday: 5, exercise_count: 1, planned_sets: 3},
+    weekly_volume: [{week_start: '2026-08-03', volume: 2400}],
+    recent_sessions: [{session_date: '2026-08-01', routine_name: 'Beine', sets: 3, reps: 30, volume: 2400}],
+  },
+  routines: {'7': {...todayData, routine: routineDetail}},
 };
 let writtenSnapshot = null;
 let clearCount = 0;
@@ -51,6 +76,15 @@ assert.equal(online.offline, false);
 assert.equal(online.snapshot.saved_at, '2026-08-08T16:30:00.000Z');
 assert.deepEqual(writtenSnapshot.routines, liveData.routines);
 assert.equal(clearCount, 0);
+
+const malformedLive = structuredClone(liveData);
+malformedLive.today.plan[0].id = '<img src=x onerror=alert(1)>';
+await assert.rejects(
+  __gymPilotTest.resolveDashboardSnapshot(
+    async () => malformedLive, onlineStore, () => new Date('2026-08-08T16:30:00.000Z'),
+  ),
+  /Ungültige Dashboard-Daten/,
+);
 
 let cachedReads = 0;
 const cachedSnapshot = {...writtenSnapshot, saved_at: '2026-08-08T15:15:00.000Z'};
@@ -101,6 +135,10 @@ assert.equal(clearCount, 1);
 let authClearCount = 0;
 await __gymPilotTest.clearDashboardSnapshot({async clear() { authClearCount += 1; }});
 assert.equal(authClearCount, 1);
+await assert.rejects(
+  __gymPilotTest.clearDashboardSnapshot({async clear() { throw new Error('delete failed'); }}),
+  /delete failed/,
+);
 
 const originalWarn = console.warn;
 console.warn = () => {};
@@ -121,6 +159,30 @@ await assert.rejects(
   /Failed to fetch/,
 );
 
+assert.equal(__gymPilotTest.validDashboardSnapshot(cachedSnapshot), true);
+const corruptions = [
+  snapshot => { delete snapshot.overview.this_week; },
+  snapshot => { snapshot.overview.weekly_volume = null; },
+  snapshot => { snapshot.overview.recent_sessions[0].session_date = 'not-a-date'; },
+  snapshot => { snapshot.today.plan[0].weekdays = '5'; },
+  snapshot => { snapshot.today.plan[0].id = '<img src=x onerror=alert(1)>'; },
+  snapshot => { snapshot.routines['7'].routine.exercises[0].current_progress = null; },
+  snapshot => { snapshot.routines['7'].routine.exercises[0].min_reps = '<svg onload=alert(1)>'; },
+  snapshot => { snapshot.routines['7'].routine.id = 8; },
+];
+for (const corrupt of corruptions) {
+  const corrupted = structuredClone(cachedSnapshot);
+  corrupt(corrupted);
+  assert.equal(__gymPilotTest.validDashboardSnapshot(corrupted), false);
+  await assert.rejects(
+    __gymPilotTest.resolveDashboardSnapshot(
+      async () => { throw new TypeError('Failed to fetch'); },
+      {async read() { return corrupted; }, async write() {}, async clear() {}},
+    ),
+    /Failed to fetch/,
+  );
+}
+
 const requestedPaths = [];
 const apiResponses = {
   '/api/health': {status: 'ok', auth_required: false},
@@ -140,6 +202,26 @@ assert.deepEqual(requestedPaths, [
   '/api/today?routine=7', '/api/today?routine=8',
 ]);
 
+let protectedSnapshot = cachedSnapshot;
+let protectedClearCount = 0;
+const protectedStore = {
+  async read() { return protectedSnapshot; },
+  async write() {},
+  async clear() { protectedClearCount += 1; protectedSnapshot = null; },
+};
+await assert.rejects(
+  __gymPilotTest.resolveDashboardSnapshot(
+    () => __gymPilotTest.fetchLiveDashboard(async path => {
+      if (path === '/api/health') return {status: 'ok', auth_required: true};
+      throw new TypeError('later request failed');
+    }, protectedStore),
+    protectedStore,
+  ),
+  /later request failed/,
+);
+assert.equal(protectedClearCount, 1);
+assert.equal(protectedSnapshot, null);
+
 const records = new Map();
 const dashboardStore = __gymPilotTest.createDashboardStore({
   async get(key) { return records.get(key) ?? null; },
@@ -154,6 +236,91 @@ await assert.rejects(
   dashboardStore.write({...cachedSnapshot, oversized: 'x'.repeat(2_100_000)}),
   /zu groß/,
 );
+
+const policyState = new Map();
+const deletionFailureStore = __gymPilotTest.createDashboardStore({
+  async get() { return cachedSnapshot; },
+  async put() {},
+  async delete() { throw new Error('IndexedDB delete failed'); },
+}, {
+  getItem(key) { return policyState.get(key) ?? null; },
+  setItem(key, value) { policyState.set(key, value); },
+  removeItem(key) { policyState.delete(key); },
+});
+await assert.rejects(deletionFailureStore.clear(), /IndexedDB delete failed/);
+assert.equal(await deletionFailureStore.read(), null);
+const afterRestartStore = __gymPilotTest.createDashboardStore({
+  async get() { return cachedSnapshot; },
+  async put() {},
+  async delete() {},
+}, {
+  getItem(key) { return policyState.get(key) ?? null; },
+  setItem(key, value) { policyState.set(key, value); },
+  removeItem(key) { policyState.delete(key); },
+});
+assert.equal(await afterRestartStore.read(), null);
+
+let releaseStaleWrite;
+let staleStored = cachedSnapshot;
+const staleWriteStarted = new Promise(resolve => { releaseStaleWrite = resolve; });
+let finishStaleWrite;
+const racingPolicy = new Map();
+const racingStore = __gymPilotTest.createDashboardStore({
+  async get() { return staleStored; },
+  async put(_key, value) {
+    await new Promise(resolve => { finishStaleWrite = () => { staleStored = value; resolve(); }; });
+  },
+  async delete() { staleStored = null; },
+}, {
+  getItem(key) { return racingPolicy.get(key) ?? null; },
+  setItem(key, value) { racingPolicy.set(key, value); releaseStaleWrite(); },
+  removeItem(key) { racingPolicy.delete(key); },
+});
+const staleWrite = racingStore.write({...cachedSnapshot, saved_at: '2026-08-08T17:00:00.000Z'});
+await new Promise(resolve => setImmediate(resolve));
+const racingClear = racingStore.clear();
+await staleWriteStarted;
+finishStaleWrite();
+await assert.rejects(staleWrite, /ungültig/i);
+await racingClear;
+assert.equal(await racingStore.read(), null);
+assert.equal(racingPolicy.get('gympilot-dashboard-offline-blocked'), '1');
+
+let releaseOldFetch;
+const oldFetchGate = new Promise(resolve => { releaseOldFetch = resolve; });
+let epochStored = cachedSnapshot;
+const epochPolicy = new Map();
+const epochStore = __gymPilotTest.createDashboardStore({
+  async get() { return epochStored; },
+  async put(_key, value) { epochStored = value; },
+  async delete() { epochStored = null; },
+}, {
+  getItem(key) { return epochPolicy.get(key) ?? null; },
+  setItem(key, value) { epochPolicy.set(key, value); },
+  removeItem(key) { epochPolicy.delete(key); },
+});
+const oldFetch = __gymPilotTest.resolveDashboardSnapshot(async () => {
+  await oldFetchGate;
+  return liveData;
+}, epochStore, () => new Date('2026-08-08T18:00:00.000Z'));
+await new Promise(resolve => setImmediate(resolve));
+await epochStore.clear();
+releaseOldFetch();
+await assert.rejects(oldFetch, /ungültig/i);
+assert.equal(await epochStore.read(), null);
+assert.equal(epochPolicy.get('gympilot-dashboard-offline-blocked'), '1');
+
+const totalFailureStore = __gymPilotTest.createDashboardStore({
+  async get() { return cachedSnapshot; },
+  async put() {},
+  async delete() { throw new Error('delete denied'); },
+}, {
+  getItem() { return null; },
+  setItem() { throw new Error('marker denied'); },
+  removeItem() {},
+});
+await assert.rejects(totalFailureStore.clear(), /Sperrmarke.*Löschen/);
+assert.equal(await totalFailureStore.read(), null);
 
 const idbRecords = new Map();
 let openedDatabase = null;
@@ -278,7 +445,7 @@ const swContext = vm.createContext({
   },
 });
 vm.runInContext(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), swContext);
-assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v9/);
+assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v11/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /cache:\s*['"]reload['"]/);
 assert.equal(typeof fetchHandler, 'function');
 let responsePromise;
@@ -289,5 +456,49 @@ fetchHandler({
 await responsePromise;
 assert.equal(fetchOptions.cache, 'no-store');
 assert.equal(cacheTouched, false);
+
+let coldFetchHandler;
+let activateHandler;
+let releaseClaim;
+const claimPromise = new Promise(resolve => { releaseClaim = resolve; });
+const shellResponse = {ok: true, source: 'cached-index'};
+const coldContext = vm.createContext({
+  URL,
+  Request: class { constructor(path, options) { this.url = path; this.cache = options?.cache; } },
+  location: {origin: 'http://127.0.0.1:8765'},
+  fetch: async () => { throw new TypeError('server offline'); },
+  caches: {
+    async match(request) { return request === '/index.html' ? shellResponse : null; },
+    async open() { return {put: async () => {}}; },
+    async keys() { return ['gympilot-shell-v8', 'gympilot-shell-v9']; },
+    async delete() { return true; },
+  },
+  self: {
+    clients: {claim: () => claimPromise},
+    skipWaiting() {},
+    addEventListener(name, handler) {
+      if (name === 'fetch') coldFetchHandler = handler;
+      if (name === 'activate') activateHandler = handler;
+    },
+  },
+});
+vm.runInContext(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), coldContext);
+
+let coldResponsePromise;
+coldFetchHandler({
+  request: {url: 'http://127.0.0.1:8765/app-launch?source=homescreen', method: 'GET', mode: 'navigate'},
+  respondWith(promise) { coldResponsePromise = promise; },
+});
+assert.equal(await coldResponsePromise, shellResponse);
+
+let activationPromise;
+activateHandler({waitUntil(promise) { activationPromise = promise; }});
+let activationFinished = false;
+activationPromise.then(() => { activationFinished = true; });
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(activationFinished, false);
+releaseClaim();
+await activationPromise;
+assert.equal(activationFinished, true);
 
 console.log('web runtime: cockpit navigation, comparison cards, charts, history, units, and API cache bypass ok');

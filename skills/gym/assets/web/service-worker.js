@@ -1,4 +1,4 @@
-const CACHE = 'gympilot-shell-v9';
+const CACHE = 'gympilot-shell-v11';
 const SHELL = [
   '/',
   '/index.html',
@@ -25,10 +25,12 @@ self.addEventListener('install', event => {
 });
 
 self.addEventListener('activate', event => {
-  event.waitUntil(caches.keys().then(keys => Promise.all(
-    keys.filter(key => key !== CACHE).map(key => caches.delete(key)),
-  )));
-  self.clients.claim();
+  event.waitUntil(Promise.all([
+    caches.keys().then(keys => Promise.all(
+      keys.filter(key => key !== CACHE).map(key => caches.delete(key)),
+    )),
+    self.clients.claim(),
+  ]));
 });
 
 self.addEventListener('fetch', event => {
@@ -38,6 +40,10 @@ self.addEventListener('fetch', event => {
     return;
   }
   if (event.request.method !== 'GET' || url.origin !== location.origin) return;
+  if (event.request.mode === 'navigate') {
+    event.respondWith(caches.match('/index.html').then(cached => cached || fetch('/index.html', {cache: 'reload'})));
+    return;
+  }
   event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
     if (response.ok) caches.open(CACHE).then(cache => cache.put(event.request, response.clone()));
     return response;
