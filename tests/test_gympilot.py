@@ -189,9 +189,100 @@ class GymPilotTest(unittest.TestCase):
         (newer_home / "gympilot").mkdir(parents=True)
         with sqlite3.connect(newer_home / "gympilot" / "gympilot.db") as con:
             con.execute("PRAGMA user_version=99")
+        newer_db = newer_home / "gympilot" / "gympilot.db"
+        newer_db.parent.chmod(0o755)
+        before_bytes = newer_db.read_bytes()
+        before_mode = stat.S_IMODE(newer_db.stat().st_mode)
+        before_directory_mode = stat.S_IMODE(newer_db.parent.stat().st_mode)
+        before_files = sorted(path.name for path in newer_db.parent.iterdir())
         os.environ["HERMES_HOME"] = str(newer_home)
         with self.assertRaisesRegex(ValueError, "newer|version"):
             gym.initialize()
+        self.assertEqual(newer_db.read_bytes(), before_bytes)
+        self.assertEqual(stat.S_IMODE(newer_db.stat().st_mode), before_mode)
+        self.assertEqual(stat.S_IMODE(newer_db.parent.stat().st_mode), before_directory_mode)
+        self.assertEqual(sorted(path.name for path in newer_db.parent.iterdir()), before_files)
+
+        wal_home = self.home.parent / "newer-wal"
+        (wal_home / "gympilot").mkdir(parents=True)
+        wal_db = wal_home / "gympilot" / "gympilot.db"
+        with sqlite3.connect(wal_db) as con:
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute("CREATE TABLE sentinel(value TEXT)")
+            con.execute("INSERT INTO sentinel VALUES('keep')")
+            con.execute("PRAGMA user_version=99")
+            con.commit()
+            wal_before = {path.name: path.read_bytes() for path in wal_db.parent.iterdir()}
+            os.environ["HERMES_HOME"] = str(wal_home)
+            with self.assertRaisesRegex(ValueError, "newer|version"):
+                gym.initialize()
+            self.assertEqual(
+                {path.name: path.read_bytes() for path in wal_db.parent.iterdir()}, wal_before
+            )
+
+    def test_unknown_newer_replacement_after_inspection_is_never_mutated(self):
+        gym = load_module()
+        race_home = self.home.parent / "replacement-race"
+        data = race_home / "gympilot"
+        data.mkdir(parents=True, mode=0o755)
+        database = data / "gympilot.db"
+        replacement = data / "replacement.db"
+        with sqlite3.connect(database) as con:
+            con.execute("PRAGMA user_version=2")
+        with sqlite3.connect(replacement) as con:
+            con.execute("CREATE TABLE sentinel(value TEXT)")
+            con.execute("INSERT INTO sentinel VALUES('replacement must stay unchanged')")
+            con.execute("PRAGMA user_version=99")
+        database.chmod(0o640)
+        replacement.chmod(0o640)
+        replacement_bytes = replacement.read_bytes()
+        directory_mode = stat.S_IMODE(data.stat().st_mode)
+        os.environ["HERMES_HOME"] = str(race_home)
+        original_inspection = gym.existing_schema_version_read_only
+
+        def inspect_then_replace():
+            version = original_inspection()
+            os.replace(replacement, database)
+            return version
+
+        setattr(gym, "existing_schema_version_read_only", inspect_then_replace)
+        try:
+            with self.assertRaisesRegex(ValueError, "changed|replaced|newer|version"):
+                gym.initialize()
+        finally:
+            setattr(gym, "existing_schema_version_read_only", original_inspection)
+        self.assertEqual(database.read_bytes(), replacement_bytes)
+        self.assertEqual(stat.S_IMODE(database.stat().st_mode), 0o640)
+        self.assertEqual(stat.S_IMODE(data.stat().st_mode), directory_mode)
+        self.assertEqual(sorted(path.name for path in data.iterdir()), ["gympilot.db"])
+
+    def test_fresh_initialization_rejects_a_database_that_appears_during_creation(self):
+        gym = load_module()
+        race_home = self.home.parent / "fresh-creation-race"
+        os.environ["HERMES_HOME"] = str(race_home)
+        original_prepare = gym.prepare_private_file
+        appeared = {}
+
+        def create_before_exclusive_open(path):
+            if path == gym.db_path() and not path.exists():
+                with sqlite3.connect(path) as connection:
+                    connection.execute("PRAGMA user_version=99")
+                path.chmod(0o640)
+                appeared["bytes"] = path.read_bytes()
+                appeared["mode"] = stat.S_IMODE(path.stat().st_mode)
+            return original_prepare(path)
+
+        setattr(gym, "prepare_private_file", create_before_exclusive_open)
+        try:
+            with self.assertRaisesRegex(ValueError, "appeared.*retry"):
+                gym.initialize()
+        finally:
+            setattr(gym, "prepare_private_file", original_prepare)
+        database = race_home / "gympilot" / "gympilot.db"
+        self.assertEqual(database.read_bytes(), appeared["bytes"])
+        self.assertEqual(stat.S_IMODE(database.stat().st_mode), appeared["mode"])
+        self.assertEqual(sorted(path.name for path in database.parent.iterdir()), ["gympilot.db"])
+
 
     def test_v1_to_v2_migration_recovers_from_interrupted_column_addition(self):
         gym = load_module()
@@ -451,7 +542,11 @@ class GymPilotTest(unittest.TestCase):
             )
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(finish, ("8", "12")))
-        self.assertEqual(sorted(result.returncode for result in results), [0, 2])
+        self.assertEqual(
+            sorted(result.returncode for result in results),
+            [0, 2],
+            [(result.returncode, result.stdout, result.stderr) for result in results],
+        )
         status = self.cli("onboarding", "status")[1]
         plan = self.cli("plan")[1]
         self.assertEqual(status["answers"]["plan_materialized"], "1")
@@ -994,11 +1089,68 @@ class GymPilotTest(unittest.TestCase):
         rejected, payload = self.cli("draft", "generate", "--goal", "strength", "--day", 2, "--day", 2,
                                      "--duration", 30, "--experience", "beginner", check=False)
         self.assertEqual(rejected.returncode, 2)
+        self.assertIsNotNone(payload)
+        assert payload is not None
         self.assertIn("unique", payload["error"])
         rejected, payload = self.cli("draft", "generate", "--goal", "strength", "--day", 2,
                                      "--duration", 30, "--experience", "beginner", "--restriction", "unknown", check=False)
         self.assertEqual(rejected.returncode, 2)
+        self.assertIsNotNone(payload)
+        assert payload is not None
         self.assertIn("invalid choice", payload["error"])
+
+    def test_generator_metadata_is_reserved_and_removed_after_structured_edit(self):
+        draft = self.cli(
+            "draft", "generate", "--goal", "general_fitness", "--day", 1,
+            "--duration", 60, "--experience", "beginner",
+        )[1]
+        self.assertIsNotNone(draft)
+        assert draft is not None
+        rejected, payload = self.cli(
+            "draft", "import", json.dumps(draft["plan"]),
+            "--replace-revision", draft["revision"], check=False,
+        )
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertIn("generation", payload["error"])
+        first_sets = draft["plan"]["routines"][0]["exercises"][0]["sets"]
+        changed = self.cli(
+            "draft", "exercise-update", 1, 1, "--sets", min(first_sets + 1, 8),
+            "--revision", draft["revision"],
+        )[1]
+        self.assertIsNotNone(changed)
+        assert changed is not None
+        self.assertNotIn("generation", changed["plan"])
+
+    def test_confirm_rejects_semantically_forged_generator_metadata(self):
+        draft = self.cli(
+            "draft", "generate", "--goal", "general_fitness", "--day", 1,
+            "--duration", 60, "--experience", "beginner",
+        )[1]
+        self.assertIsNotNone(draft)
+        assert draft is not None
+        forged = json.loads(json.dumps(draft["plan"]))
+        forged["generation"]["equipment"] = ["dumbbell"]
+        canonical = json.dumps(forged, ensure_ascii=False, allow_nan=False,
+                               sort_keys=True, separators=(",", ":"))
+        forged_hash = __import__("hashlib").sha256(canonical.encode()).hexdigest()
+        with sqlite3.connect(self.home / "gympilot" / "gympilot.db") as con:
+            con.execute("UPDATE plan_drafts SET payload_json=?,content_hash=? WHERE id=1",
+                        (canonical, forged_hash))
+        rejected, payload = self.cli(
+            "draft", "confirm", "--revision", draft["revision"],
+            "--content-hash", forged_hash, check=False,
+        )
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertIn("provenance", payload["error"])
+        shown = self.cli("draft", "show")[1]
+        self.assertIsNotNone(shown)
+        assert shown is not None
+        self.assertEqual(shown["status"], "draft")
+        self.assertEqual(self.cli("plan")[1], [])
 
     def test_cli_generator_uses_curated_splits_and_controlled_studio_vocabulary(self):
         equipment = ("barbell", "bench", "cable", "dumbbell", "machines", "rack")

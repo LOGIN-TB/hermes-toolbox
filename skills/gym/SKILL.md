@@ -32,8 +32,8 @@ python3 "$GYM_CLI" --json status
 4. Natürliche Änderungswünsche auf den Entwurf abbilden:
    - Routine ändern: `... draft routine-update ROUTINEN_INDEX --revision REVISION [--name NAME] [--day N ...]`
    - Übung ersetzen oder Zielwerte ändern: `... draft exercise-update ROUTINEN_INDEX ÜBUNGS_INDEX --revision REVISION [...]`
-   - Strukturelle Änderungen wie Hinzufügen oder Entfernen durch einen vollständig neu normalisierten Import mit `... draft import 'JSON' --replace-revision REVISION` anwenden.
-   Nach jedem Schreibvorgang die neue Gesamtvorschau laden; jede Änderung erhöht die Revision und ändert den Hash.
+   - Strukturelle Änderungen wie Hinzufügen oder Entfernen durch einen vollständig neu normalisierten Import mit `... draft import 'JSON' --replace-revision REVISION` anwenden. Import-JSON darf nur `routines` enthalten; das reservierte `generation`-Feld niemals übernehmen oder selbst erzeugen.
+   Nach jedem Schreibvorgang die neue Gesamtvorschau laden; jede Änderung erhöht die Revision und ändert den Hash. Eine Änderung an einem Generatorentwurf entfernt dessen Generator-Provenienz. Unveränderte Generatorentwürfe werden beim Bestätigen deterministisch gegen den lokalen Generator geprüft.
 5. Erst nach einer eindeutigen Bestätigung des **aktuell gezeigten Gesamtplans** genau einmal `... draft confirm --revision REVISION --content-hash HASH` ausführen. Revision und Hash müssen aus derselben letzten Vorschau stammen. Anzeigen oder Statusprüfen materialisieren nichts. Eine laufende Session blockiert die Übernahme.
 6. Einen nicht mehr gewünschten Entwurf nur nach Bestätigung mit `... draft discard --revision REVISION` verwerfen. Aktiver Plan und Historie bleiben dabei erhalten.
 
