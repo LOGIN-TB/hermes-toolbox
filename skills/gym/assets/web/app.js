@@ -31,16 +31,78 @@ async function api(path, options = {}) {
 const OFFLINE_SNAPSHOT_VERSION = 1;
 const OFFLINE_SNAPSHOT_MAX_BYTES = 2_000_000;
 
-function createDashboardStore(driver) {
+function availablePolicyStorage() {
+  try { return globalThis.localStorage || null; }
+  catch (_error) { return null; }
+}
+
+function createDashboardStore(driver, policyStorage = availablePolicyStorage()) {
   const key = 'latest';
+  const blockedKey = 'gympilot-dashboard-offline-blocked';
+  let blocked = false;
+  let generation = 0;
+  let mutationTail = Promise.resolve();
+  const enqueueMutation = operation => {
+    const result = mutationTail.then(operation, operation);
+    mutationTail = result.catch(() => {});
+    return result;
+  };
+  const isBlocked = () => {
+    if (blocked) return true;
+    try { return policyStorage?.getItem(blockedKey) === '1'; }
+    catch (_error) { return true; }
+  };
   return {
-    read: () => driver.get(key),
-    async write(snapshot) {
-      const bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
-      if (bytes > OFFLINE_SNAPSHOT_MAX_BYTES) throw new Error('Offline-Snapshot ist zu groß.');
-      await driver.put(key, snapshot);
+    generation: () => generation,
+    async read() {
+      const startedAt = generation;
+      if (isBlocked()) return null;
+      const snapshot = await driver.get(key);
+      return startedAt === generation && !isBlocked() ? snapshot : null;
     },
-    clear: () => driver.delete(key),
+    write(snapshot, expectedGeneration = generation) {
+      const bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
+      if (bytes > OFFLINE_SNAPSHOT_MAX_BYTES) return Promise.reject(new Error('Offline-Snapshot ist zu groß.'));
+      const startedAt = expectedGeneration;
+      return enqueueMutation(async () => {
+        if (startedAt !== generation) throw new Error('Offline-Snapshot wurde durch eine neuere Sperre ungültig.');
+        await driver.put(key, snapshot);
+        if (startedAt !== generation) {
+          try { await driver.delete(key); }
+          catch (cleanupError) {
+            throw new AggregateError([cleanupError], 'Ungültiger Offline-Snapshot konnte nicht entfernt werden.');
+          }
+          throw new Error('Offline-Snapshot wurde durch eine neuere Sperre ungültig.');
+        }
+        try { policyStorage?.removeItem(blockedKey); }
+        catch (error) {
+          blocked = true;
+          throw new AggregateError([error], 'Offline-Sperrmarke konnte nicht aufgehoben werden.');
+        }
+        blocked = false;
+      });
+    },
+    clear() {
+      generation += 1;
+      blocked = true;
+      let markerError = null;
+      try {
+        if (policyStorage) policyStorage.setItem(blockedKey, '1');
+        else markerError = new Error('Persistenter Richtlinienspeicher ist nicht verfügbar.');
+      } catch (error) { markerError = error; }
+      return enqueueMutation(async () => {
+        try { await driver.delete(key); }
+        catch (deleteError) {
+          if (markerError) {
+            throw new AggregateError(
+              [markerError, deleteError],
+              'Sperrmarke konnte nicht gespeichert und Snapshot nicht durch Löschen invalidiert werden.',
+            );
+          }
+          throw deleteError;
+        }
+      });
+    },
   };
 }
 
@@ -80,17 +142,63 @@ function createIndexedDbDriver(factory) {
 const dashboardStore = createDashboardStore(createIndexedDbDriver(globalThis.indexedDB));
 
 async function clearDashboardSnapshot(store = dashboardStore) {
-  try { await store.clear(); }
-  catch (error) { console.warn('Offline-Snapshot konnte nicht gelöscht werden.', error); }
+  await store.clear();
 }
 
-function validDashboardSnapshot(snapshot) {
-  return Boolean(snapshot && snapshot.version === OFFLINE_SNAPSHOT_VERSION &&
-    typeof snapshot.saved_at === 'string' && !Number.isNaN(Date.parse(snapshot.saved_at)) &&
-    snapshot.health && snapshot.health.auth_required === false &&
-    snapshot.today && Array.isArray(snapshot.today.plan) && snapshot.today.profile &&
-    snapshot.overview && typeof snapshot.overview.date === 'string' &&
-    snapshot.routines && typeof snapshot.routines === 'object' && !Array.isArray(snapshot.routines));
+const isRecord = value => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+const isSafeInteger = value => Number.isSafeInteger(value) && value >= 0;
+const isFiniteNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const isWeekday = value => Number.isInteger(value) && value >= 1 && value <= 7;
+const isIsoDate = value => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
+};
+const isOptionalIsoDate = value => value === null || isIsoDate(value);
+const isMetricBlock = value => isRecord(value) && ['sessions', 'sets', 'reps'].every(key => isSafeInteger(value[key])) && isFiniteNumber(value.volume);
+const isPlanExercise = exercise => isRecord(exercise) && typeof exercise.name === 'string' &&
+  isSafeInteger(exercise.planned_sets) && isSafeInteger(exercise.min_reps) && isSafeInteger(exercise.max_reps);
+const isWorkoutSet = set => isRecord(set) && isSafeInteger(set.set_number) &&
+  isFiniteNumber(set.weight_kg) && isSafeInteger(set.reps) &&
+  (set.equipment_alias === null || typeof set.equipment_alias === 'string');
+const isRoutineSummary = routine => isRecord(routine) && Number.isSafeInteger(routine.id) && routine.id > 0 &&
+  typeof routine.name === 'string' && Array.isArray(routine.weekdays) && routine.weekdays.every(isWeekday) &&
+  Array.isArray(routine.exercises) && routine.exercises.every(isPlanExercise);
+const isRoutineDetail = routine => isRoutineSummary(routine) && isOptionalIsoDate(routine.last_comparable_session_date) &&
+  routine.exercises.every(exercise => isRecord(exercise.current_progress) &&
+    isSafeInteger(exercise.current_progress.completed_sets) && isSafeInteger(exercise.current_progress.planned_sets) &&
+    Array.isArray(exercise.last_sets) && exercise.last_sets.every(isWorkoutSet) &&
+    Array.isArray(exercise.current_sets) && exercise.current_sets.every(isWorkoutSet));
+const isTodayPayload = today => isRecord(today) && isRecord(today.profile) &&
+  ['metric', 'imperial'].includes(today.profile.units) && isWeekday(today.weekday) &&
+  Array.isArray(today.plan) && today.plan.every(isRoutineSummary) &&
+  (today.routine === null || isRoutineDetail(today.routine));
+const isOverviewPayload = overview => isRecord(overview) && isIsoDate(overview.date) &&
+  isMetricBlock(overview.this_week) && isMetricBlock(overview.totals) &&
+  (overview.next_routine === null || (isRecord(overview.next_routine) && typeof overview.next_routine.name === 'string' &&
+    isWeekday(overview.next_routine.weekday) && isSafeInteger(overview.next_routine.exercise_count) && isSafeInteger(overview.next_routine.planned_sets))) &&
+  Array.isArray(overview.weekly_volume) && overview.weekly_volume.every(item =>
+    isRecord(item) && isIsoDate(item.week_start) && isFiniteNumber(item.volume)) &&
+  Array.isArray(overview.recent_sessions) && overview.recent_sessions.every(item =>
+    isRecord(item) && isIsoDate(item.session_date) && typeof item.routine_name === 'string' &&
+    isSafeInteger(item.sets) && isSafeInteger(item.reps) && isFiniteNumber(item.volume));
+
+function validDashboardSnapshot(snapshot, allowProtected = false) {
+  if (!isRecord(snapshot) || snapshot.version !== OFFLINE_SNAPSHOT_VERSION ||
+      typeof snapshot.saved_at !== 'string' || Number.isNaN(Date.parse(snapshot.saved_at)) ||
+      !isRecord(snapshot.health) || typeof snapshot.health.auth_required !== 'boolean' ||
+      (!allowProtected && snapshot.health.auth_required) ||
+      !isTodayPayload(snapshot.today) || !isOverviewPayload(snapshot.overview) || !isRecord(snapshot.routines)) return false;
+  try {
+    if (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > OFFLINE_SNAPSHOT_MAX_BYTES) return false;
+  } catch (_error) { return false; }
+  const plannedIds = new Set(snapshot.today.plan.map(routine => String(routine.id)));
+  const routineKeys = Object.keys(snapshot.routines);
+  if (routineKeys.length !== plannedIds.size || routineKeys.some(key => !plannedIds.has(key))) return false;
+  return routineKeys.every(key => {
+    const payload = snapshot.routines[key];
+    return isTodayPayload(payload) && payload.routine !== null && String(payload.routine.id) === key;
+  });
 }
 
 function isNetworkFailure(error) {
@@ -98,12 +206,17 @@ function isNetworkFailure(error) {
 }
 
 async function resolveDashboardSnapshot(fetchLive, store, clock = () => new Date()) {
+  const startedAt = store.generation?.();
   try {
     const live = await fetchLive();
+    if (startedAt !== undefined && startedAt !== store.generation() && !live.health?.auth_required) {
+      throw new Error('Dashboard-Abruf wurde durch eine neuere Sperre ungültig.');
+    }
     const snapshot = {...live, version: OFFLINE_SNAPSHOT_VERSION, saved_at: clock().toISOString()};
+    if (!validDashboardSnapshot(snapshot, true)) throw new Error('Ungültige Dashboard-Daten.');
     try {
       if (snapshot.health.auth_required) await store.clear();
-      else await store.write(snapshot);
+      else await store.write(snapshot, startedAt);
     } catch (cacheError) {
       console.warn('Offline-Snapshot konnte nicht gespeichert werden.', cacheError);
     }
@@ -137,8 +250,9 @@ function updateDashboardStatus(result) {
   $('healthDot').classList.toggle('offline', offline);
 }
 
-async function fetchLiveDashboard(client = api) {
+async function fetchLiveDashboard(client = api, store = dashboardStore) {
   const health = await client('/api/health');
+  if (health.auth_required) await store.clear();
   const [today, overview] = await Promise.all([client('/api/today'), client('/api/overview')]);
   const details = await Promise.all(today.plan.map(routine => client(`/api/today?routine=${routine.id}`)));
   const routines = Object.fromEntries(today.plan.map((routine, index) => [String(routine.id), details[index]]));
