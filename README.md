@@ -10,7 +10,9 @@ GymPilot ist ein lokaler Trainingstracker mit mobiler Weboberfläche und PWA-Dat
 - laufende Einheiten, Satzkorrekturen und Vergleich mit der letzten Einheit derselben Routine
 - Gewichteingabe in kg oder lb; Speicherung einheitlich in kg
 - Gerätealiases für bestätigte Gerätefotos und gerätebezogene Satzhistorie
-- unterbrechbares Onboarding im Chat mit Bestätigung jedes Werts
+- drei Setup-Wege: Gesamtplan importieren, lokal automatisch erzeugen oder weiterhin manuell eingeben
+- persistenter Gesamtentwurf mit vollständiger Vorschau und genau einer atomaren Gesamtbestätigung
+- dauerhaft editierbares Geräte-/Studioprofil und deterministische Übungsauswahl aus einer kuratierten lokalen Bibliothek
 - JSON-Ausgabe für Hermes und lesbare Terminalausgabe
 - mobile Oberfläche; als PWA installierbar, wenn der Browser einen sicheren Kontext bereitstellt
 - Standardbindung an `127.0.0.1`; bewusste Freigabe für eine konkrete LAN- oder VPN-Adresse
@@ -84,6 +86,11 @@ Häufig verwendete Befehle:
 python3 skills/gym/scripts/gympilot.py --json status
 python3 skills/gym/scripts/gympilot.py --json today
 python3 skills/gym/scripts/gympilot.py --json plan
+python3 skills/gym/scripts/gympilot.py --json draft capabilities
+python3 skills/gym/scripts/gympilot.py --json studio-profile update --equipment barbell --equipment bench
+python3 skills/gym/scripts/gympilot.py --json draft generate --goal strength --day 1 --day 4 --duration 45 --experience intermediate
+python3 skills/gym/scripts/gympilot.py --json draft show
+python3 skills/gym/scripts/gympilot.py --json draft confirm --revision REVISION --content-hash HASH
 python3 skills/gym/scripts/gympilot.py --json session start --routine 1
 python3 skills/gym/scripts/gympilot.py --json equipment add 1 "Beinpresse Studio A"
 python3 skills/gym/scripts/gympilot.py --json set log 1 1 --weight 60 --reps 8 --equipment 1
@@ -92,18 +99,36 @@ python3 skills/gym/scripts/gympilot.py --json export
 python3 skills/gym/scripts/gympilot.py --json backup
 ```
 
-## Unterbrechbares `/gym setup`
+## Unterbrechbares `/gym setup` als Gesamtplan
 
-`/gym setup` liest wiederholt `onboarding status`, fragt nur nach `next_field`, lässt den Wert bestätigen und speichert ihn mit `onboarding set FIELD VALUE`. Jede bestätigte Antwort bleibt sofort erhalten.
+`onboarding status` nennt die drei Modi `import`, `generate` und `manual`. Die Auswahl wird mit `onboarding mode MODUS` gespeichert. Ein vorhandener Entwurf bleibt über Prozess- und Chatunterbrechungen hinweg erhalten. `draft show` ist rein lesend und materialisiert niemals einen Plan.
 
-Die Phasen und Feldnamen sind:
+### Vollständigen Plan importieren
 
-1. Profil: `display_name`, `locale`, `units`, `goal`
-2. Anzahl Routinen: `routine_count`
-3. Je Routine N: `routine_N_name`, `routine_N_weekdays` und `routine_N_exercise_count`
-4. Je Übung M: `routine_N_exercise_M_name`, `_sets`, `_min_reps` und `_max_reps`
+Ein in Telegram eingefügter Gesamtplan wird von Hermes als Ganzes gelesen und in striktes JSON für `draft import JSON` übertragen. Der Nutzer muss das JSON nicht selbst schreiben. Es enthält `routines`; jede Routine hat `name`, eindeutige ISO-`weekdays` und `exercises`. Jede Übung enthält `name`, `sets`, `min_reps` und `max_reps`. Doppelte JSON-Schlüssel, `NaN`, `Infinity`, doppelte Tage, überschrittene Anzahlgrenzen und ungültige Wiederholungsbereiche werden abgelehnt.
 
-`routine_N_weekdays` verwendet durch Kommas getrennte ISO-Wochentage von 1 bis 7. Bei `phase: complete` legt GymPilot Routinen und Übungen in einer Transaktion an. Ein unterbrochenes Setup wird beim ersten fehlenden Feld fortgesetzt. Nach dem Abschluss sind die Setup-Antworten gesperrt; spätere Änderungen erfolgen über `/gym plan`. Passwortfelder werden im Onboarding grundsätzlich abgelehnt.
+Existiert bereits ein Entwurf, wird er nicht still überschrieben. Ein bewusster vollständiger Ersatz benötigt `--replace-revision REVISION` mit der Revision der letzten Vorschau.
+
+### Gesamtplan automatisch erzeugen
+
+`draft generate` berücksichtigt eines der vier Ziele `muscle_gain`, `strength`, `general_fitness` und `weight_loss`, ein bis sechs Trainingstage, Dauer, Erfahrung, bevorzugte Körperbereiche, vermiedene Übungen und kontrollierte Einschränkungen. Das dauerhafte Geräteprofil wird mit `studio-profile show` gelesen und mit `studio-profile update --equipment NAME [...]` vollständig und editierbar gespeichert. `studio-profile update` ohne `--equipment` setzt es bewusst auf Bodyweight beziehungsweise keine Geräte zurück. `draft capabilities` zeigt alle unterstützten Geräte, Fokusbereiche, Einschränkungen und Übungsnamen. Unbekannte Werte und Tippfehler werden abgewiesen statt ignoriert.
+
+Die Übungsauswahl ist deterministisch und erfolgt ausschließlich aus einer kuratierten lokalen Bibliothek mit 33 Übungen; es gibt keinen Cloud-Aufruf. Je nach Anzahl der Trainingstage entstehen Ganzkörper-, Ober-/Unterkörper- oder Push/Pull/Beine-Aufteilungen. Satz- und Wiederholungsziele unterscheiden Haupt- und Zubehörübungen sowie Ziel und Erfahrung. Das Dauerbudget berücksichtigt Sätze, Pausen und Gerätewechsel. Gerätefreie Varianten dienen als kontrollierter Fallback, nicht als zufälliger Ersatz.
+
+```bash
+python3 skills/gym/scripts/gympilot.py --json studio-profile update --equipment barbell --equipment bench --equipment dumbbell
+python3 skills/gym/scripts/gympilot.py --json draft generate --goal muscle_gain --day 1 --day 4 --duration 45 --experience intermediate --focus chest --avoid "Push-up" --restriction no_overhead
+```
+
+### Gesamtvorschau, Änderung und Bestätigung
+
+`draft show` liefert den persistenten Entwurf nach jeder Unterbrechung zusammen mit einer monotonen `revision` und einem SHA-256-`content_hash` über das kanonische Plan-JSON. Mit `draft routine-update ... --revision REVISION` und `draft exercise-update ... --revision REVISION` lassen sich bestätigte Änderungswünsche strukturiert anwenden. Jede Änderung erhöht die Revision und erzeugt einen neuen Hash; danach muss der Gesamtplan erneut gezeigt werden.
+
+Erst nachdem der vollständige aktuelle Plan als Ganzes bestätigt wurde, materialisiert `draft confirm --revision REVISION --content-hash HASH` exakt diesen Entwurf in einer atomaren Transaktion. Veraltete Vorschauen, parallele Bestätigungen und manipulierte Entwürfe werden abgewiesen. Eine laufende Session blockiert den Austausch und löst einen vollständigen Rollback aus. Historische Sessions, Sätze und Gerätealiases werden nicht geändert. `draft discard --revision REVISION` verwirft nur den Entwurf.
+
+### Bisheriger manueller Ablauf
+
+Der Modus `manual` bleibt erhalten. Er liest wiederholt `onboarding status`, fragt nur nach `next_field`, bestätigt jeden Wert und speichert ihn mit `onboarding set FIELD VALUE`. Die Reihenfolge bleibt `display_name`, `locale`, `units`, `goal`, `routine_count`, danach je Routine Name, Wochentage und Übungen samt Satz- und Wiederholungszielen. Passwortfelder werden immer abgelehnt.
 
 ## Trainingsplan ändern
 
@@ -168,11 +193,11 @@ Der Server bindet standardmäßig nur an Loopback. Wildcard- und öffentlich rou
 
 Die Authentifizierung speichert nur Salt und Passwort-Hash: `scrypt`, soweit die Python-Installation es unterstützt, sonst PBKDF2-HMAC-SHA256 mit 600.000 Iterationen. Sitzungstokens werden zufällig erzeugt und nur gehasht in SQLite gespeichert. Cookies sind `HttpOnly` und `SameSite=Strict`. Weitere Angaben stehen in [SECURITY.md](SECURITY.md).
 
-GymPilot ist keine medizinische Software und erteilt keine medizinischen Ratschläge.
+GymPilot ist keine medizinische Software. Einschränkungen dienen nur der Trainingsplanung; im Chat werden weder medizinische Diagnosen gestellt noch Passwörter erfragt.
 
 ## Datenmodell und Migrationen
 
-`PRAGMA user_version` und `schema_migrations` protokollieren Schemaänderungen. Das Modell umfasst `user_profile`, `onboarding_state`, `routines`, `routine_days`, `exercises`, `equipment_aliases`, `routine_exercises`, `sessions` und `workout_sets` sowie Tabellen für die Web-Authentifizierung. Künftige Änderungen erhalten eine neue geordnete Migration mit Tests. Eine bereits veröffentlichte Migration wird nicht nachträglich umgeschrieben.
+`PRAGMA user_version` und `schema_migrations` protokollieren Schemaänderungen. Migration 2 ergänzt `studio_profile`, `plan_drafts` und eine stabile Planposition für Routinen; das übrige Modell umfasst `user_profile`, `onboarding_state`, `routines`, `routine_days`, `exercises`, `equipment_aliases`, `routine_exercises`, `sessions` und `workout_sets` sowie Tabellen für die Web-Authentifizierung. Künftige Änderungen erhalten eine neue geordnete Migration mit Tests. Eine bereits veröffentlichte Migration wird nicht nachträglich umgeschrieben.
 
 Das Repository enthält weder persönliche Trainingspläne noch reale Datenbanken. Ein späterer Importer muss einen Quellpfad ausdrücklich verlangen und darf keine Nutzerdaten mitliefern.
 

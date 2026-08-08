@@ -27,7 +27,20 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-SCHEMA_VERSION = 1
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from gympilot_generator import (
+    EQUIPMENT as GENERATOR_EQUIPMENT,
+    EXPERIENCE_LEVELS as GENERATOR_EXPERIENCE,
+    FOCUS_AREAS as GENERATOR_FOCUS_AREAS,
+    GOALS as GENERATOR_GOALS,
+    RESTRICTIONS as GENERATOR_RESTRICTIONS,
+    capabilities as generator_capabilities,
+    generate_plan as generate_curated_plan,
+)
+
+SCHEMA_VERSION = 2
 MAX_ROUTINES = 14
 MAX_EXERCISES_PER_ROUTINE = 50
 MAX_PLANNED_SETS = 100
@@ -157,6 +170,9 @@ WHEN NEW.active=1 AND OLD.active=0 AND EXISTS(
   JOIN routines r ON r.id=other.routine_id
   WHERE own.routine_id=NEW.id AND other.routine_id<>NEW.id AND r.active=1)
 BEGIN SELECT RAISE(ABORT, 'weekday already assigned to another active routine'); END;
+""", 2: """
+CREATE TABLE IF NOT EXISTS studio_profile(id INTEGER PRIMARY KEY CHECK(id=1), equipment_json TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS plan_drafts(id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL CHECK(mode IN ('import','generate')), payload_json TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0), content_hash TEXT NOT NULL CHECK(length(content_hash)=64), status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','confirmed','discarded')), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, confirmed_at TEXT);
 """}
 
 
@@ -184,11 +200,31 @@ def initialize() -> dict:
     private_directory(data_dir())
     with connect() as con:
         current = con.execute("PRAGMA user_version").fetchone()[0]
+        if current > SCHEMA_VERSION:
+            raise ValueError(f"database schema version {current} is newer than supported version {SCHEMA_VERSION}")
         for version in range(current + 1, SCHEMA_VERSION + 1):
-            con.executescript(MIGRATIONS[version])
-            con.execute("INSERT INTO schema_migrations VALUES(?,?)", (version, now()))
-            con.execute(f"PRAGMA user_version={version}")
+            if version==2:
+                con.execute("BEGIN IMMEDIATE")
+                try:
+                    columns={row[1] for row in con.execute("PRAGMA table_info(routines)")}
+                    if "plan_position" not in columns:
+                        con.execute("ALTER TABLE routines ADD COLUMN plan_position INTEGER NOT NULL DEFAULT 0 CHECK(plan_position>=0)")
+                    con.execute("UPDATE routines SET plan_position=id WHERE plan_position=0")
+                    for statement in MIGRATIONS[version].split(";"):
+                        if statement.strip(): con.execute(statement)
+                    con.execute("INSERT OR REPLACE INTO schema_migrations VALUES(?,?)", (version, now()))
+                    con.execute(f"PRAGMA user_version={version}")
+                    con.commit()
+                except Exception:
+                    con.rollback()
+                    raise
+            else:
+                con.executescript(MIGRATIONS[version])
+                con.execute("INSERT OR REPLACE INTO schema_migrations VALUES(?,?)", (version, now()))
+                con.execute(f"PRAGMA user_version={version}")
+                con.commit()
         con.execute("INSERT OR IGNORE INTO user_profile(id,updated_at) VALUES(1,?)", (now(),))
+        con.execute("INSERT OR IGNORE INTO studio_profile(id,updated_at) VALUES(1,?)", (now(),))
         con.commit()
     if os.name != "nt": os.chmod(db_path(),0o600)
     return {"ok": True, "schema_version": SCHEMA_VERSION, "database": str(db_path())}
@@ -205,7 +241,7 @@ def rows(rows_) -> list[dict]:
 def plan() -> list[dict]:
     ensure()
     with connect() as con:
-        routines = rows(con.execute("SELECT * FROM routines WHERE active=1 ORDER BY name"))
+        routines = rows(con.execute("SELECT * FROM routines WHERE active=1 ORDER BY plan_position,id"))
         for routine in routines:
             routine["weekdays"] = [r[0] for r in con.execute("SELECT weekday FROM routine_days WHERE routine_id=? ORDER BY weekday", (routine["id"],))]
             routine["exercises"] = rows(con.execute("""SELECT e.id,e.name,e.notes exercise_notes,e.unilateral,re.position,re.planned_sets,re.min_reps,re.max_reps,re.notes FROM routine_exercises re JOIN exercises e ON e.id=re.exercise_id WHERE re.routine_id=? AND e.active=1 ORDER BY re.position""", (routine["id"],)))
@@ -328,7 +364,7 @@ def materialize_onboarding_plan(con: sqlite3.Connection, answers: dict[str, str]
         return
     for routine_number in range(1, int(answers["routine_count"]) + 1):
         prefix = f"routine_{routine_number}"
-        cur = con.execute("INSERT INTO routines(name,notes,created_at) VALUES(?,?,?)", (answers[f"{prefix}_name"], "", now()))
+        cur = con.execute("INSERT INTO routines(name,notes,plan_position,created_at) VALUES(?,?,?,?)", (answers[f"{prefix}_name"], "", routine_number, now()))
         routine_id = cur.lastrowid
         for weekday in map(int, answers[f"{prefix}_weekdays"].split(",")):
             con.execute("INSERT INTO routine_days(routine_id,weekday) VALUES(?,?)", (routine_id, weekday))
@@ -347,11 +383,9 @@ def onboarding_status(con: sqlite3.Connection) -> dict:
     sequence = onboarding_sequence(answers)
     next_field = next((field for field in sequence if field not in answers), None)
     complete = next_field is None and bool(sequence)
-    if complete:
-        materialize_onboarding_plan(con, answers)
-        answers["plan_materialized"] = "1"
     phase = "profile" if next_field in PROFILE_ONBOARDING_FIELDS else ("complete" if complete else "plan")
-    return {"answers": answers, "next_field": next_field, "phase": phase, "complete": complete}
+    return {"answers": answers, "next_field": next_field, "phase": phase, "complete": complete,
+            "setup_modes":["import","generate","manual"],"selected_mode":answers.get("setup_mode")}
 
 
 def hash_password(password: str) -> str:
@@ -421,14 +455,162 @@ LIMITER=RateLimiter()
 
 
 def strict_json_loads(raw: bytes):
+    if len(raw)>100000: raise ValueError("JSON input is too long")
     def reject_constant(value): raise ValueError(f"non-standard JSON value: {value}")
+    def bounded_integer(value):
+        if len(value.lstrip("-"))>19: raise ValueError("JSON integer is too large")
+        number=int(value)
+        if not -SQLITE_INT_MAX<=number<=SQLITE_INT_MAX: raise ValueError("JSON integer is too large")
+        return number
     def unique_object(pairs):
         result={}
         for key,value in pairs:
             if key in result: raise ValueError(f"duplicate JSON key: {key}")
             result[key]=value
         return result
-    return json.loads(raw,parse_constant=reject_constant,object_pairs_hook=unique_object)
+    value=json.loads(raw,parse_constant=reject_constant,parse_int=bounded_integer,object_pairs_hook=unique_object)
+    pending=[(value,1)]
+    while pending:
+        item,depth=pending.pop()
+        if depth>20: raise ValueError("JSON nesting is too deep")
+        if type(item) is dict: pending.extend((child,depth+1) for child in item.values())
+        elif type(item) is list: pending.extend((child,depth+1) for child in item)
+    return value
+
+
+def validate_plan_document(value) -> dict:
+    if type(value) is not dict or set(value) - {"routines", "generation"}:
+        raise ValueError("plan must be an object containing routines")
+    routines=value.get("routines")
+    if type(routines) is not list or not (1 <= len(routines) <= MAX_ROUTINES):
+        raise ValueError(f"routines must contain between 1 and {MAX_ROUTINES} entries")
+    seen_days=set(); seen_names=set()
+    for routine in routines:
+        if type(routine) is not dict or set(routine)!={"name","weekdays","exercises"}:
+            raise ValueError("each routine requires exactly name, weekdays, and exercises")
+        name=routine["name"]
+        if type(name) is not str or not name.strip() or len(name)>200 or name in seen_names:
+            raise ValueError("routine names must be non-empty, bounded, and unique")
+        seen_names.add(name)
+        days=routine["weekdays"]
+        if type(days) is not list or not days or any(type(day) is not int or not 1<=day<=7 for day in days) or len(days)!=len(set(days)):
+            raise ValueError("weekdays must be unique ISO integers 1-7")
+        if seen_days.intersection(days): raise ValueError("weekdays must be unique across routines")
+        seen_days.update(days)
+        exercises=routine["exercises"]
+        if type(exercises) is not list or not (1<=len(exercises)<=MAX_EXERCISES_PER_ROUTINE):
+            raise ValueError(f"exercises must contain between 1 and {MAX_EXERCISES_PER_ROUTINE} entries")
+        exercise_names=set()
+        for exercise in exercises:
+            if type(exercise) is not dict or set(exercise)!={"name","sets","min_reps","max_reps"}:
+                raise ValueError("each exercise requires exactly name, sets, min_reps, and max_reps")
+            ex_name=exercise["name"]
+            if type(ex_name) is not str or not ex_name.strip() or len(ex_name)>200 or ex_name in exercise_names:
+                raise ValueError("exercise names in a routine must be non-empty, bounded, and unique")
+            exercise_names.add(ex_name)
+            sets,low,high=exercise["sets"],exercise["min_reps"],exercise["max_reps"]
+            if any(type(number) is not int for number in (sets,low,high)) or not 1<=sets<=MAX_PLANNED_SETS or not 1<=low<=high<=MAX_REPS:
+                raise ValueError("exercise targets must satisfy limits and 1 <= min_reps <= max_reps")
+    if "generation" in value:
+        generation=value["generation"]
+        required={
+            "generator_version","goal","days","duration_minutes","estimated_duration_minutes",
+            "experience","equipment","preferred_body_areas","avoided_exercises","restrictions",
+            "unmet_preferences","selections","notice",
+        }
+        if type(generation) is not dict or set(generation)!=required:
+            raise ValueError("generation metadata contains unknown or missing fields")
+        if generation["generator_version"]!="curated-local-v2":
+            raise ValueError("generation version is unsupported")
+        if generation["goal"] not in GENERATOR_GOALS or generation["experience"] not in GENERATOR_EXPERIENCE:
+            raise ValueError("generation goal or experience is invalid")
+        if type(generation["duration_minutes"]) is not int or not 20<=generation["duration_minutes"]<=180:
+            raise ValueError("generation duration is invalid")
+        if type(generation["estimated_duration_minutes"]) is not int or not 1<=generation["estimated_duration_minutes"]<=generation["duration_minutes"]:
+            raise ValueError("generation estimated duration is invalid")
+        list_domains={
+            "equipment":set(GENERATOR_EQUIPMENT),
+            "preferred_body_areas":set(GENERATOR_FOCUS_AREAS),
+            "restrictions":set(GENERATOR_RESTRICTIONS),
+        }
+        for field,allowed in list_domains.items():
+            items=generation[field]
+            if type(items) is not list or len(items)>100 or any(type(item) is not str or item not in allowed for item in items):
+                raise ValueError(f"generation {field} type or value is invalid")
+        avoided=generation["avoided_exercises"]
+        unmet=generation["unmet_preferences"]
+        if type(avoided) is not list or len(avoided)>100 or any(type(item) is not str or len(item)>200 for item in avoided):
+            raise ValueError("generation avoided_exercises type is invalid")
+        if type(unmet) is not list or len(unmet)>100 or any(type(item) is not str or item not in GENERATOR_FOCUS_AREAS for item in unmet):
+            raise ValueError("generation unmet_preferences type is invalid")
+        if type(generation["notice"]) is not str or not generation["notice"] or len(generation["notice"])>500:
+            raise ValueError("generation notice is invalid")
+        selections=generation["selections"]
+        if type(selections) is not list or len(selections)!=len(routines):
+            raise ValueError("generation selections must match routines")
+        for selection,routine in zip(selections,routines):
+            if type(selection) is not dict or set(selection)!={"routine","exercise_ids","patterns"}:
+                raise ValueError("generation selection is invalid")
+            if selection["routine"]!=routine["name"]:
+                raise ValueError("generation selection routine mismatch")
+            for field in ("exercise_ids","patterns"):
+                items=selection[field]
+                if type(items) is not list or len(items)!=len(routine["exercises"]) or any(type(item) is not str or len(item)>200 for item in items):
+                    raise ValueError(f"generation selection {field} is invalid")
+            if any(pattern not in {"core_brace","elbow_extension","elbow_flexion","hip_hinge","horizontal_pull","horizontal_push","knee_dominant","single_leg","vertical_pull","vertical_push"} for pattern in selection["patterns"]):
+                raise ValueError("generation selection pattern is invalid")
+        days=generation["days"]
+        if type(days) is not list or any(type(day) is not int for day in days):
+            raise ValueError("generation days type is invalid")
+        if days!=[routine["weekdays"][0] for routine in routines]:
+            raise ValueError("generation days must match routines")
+    return value
+
+
+def canonical_plan_json(document: dict) -> str:
+    validate_plan_document(document)
+    return json.dumps(document,ensure_ascii=False,allow_nan=False,sort_keys=True,separators=(",",":"))
+
+
+def draft_result(row: sqlite3.Row) -> dict:
+    return {"mode":row["mode"],"status":row["status"],"plan":json.loads(row["payload_json"]),
+            "revision":row["revision"],"content_hash":row["content_hash"],
+            "created_at":row["created_at"],"updated_at":row["updated_at"],"confirmed_at":row["confirmed_at"]}
+
+
+def materialize_draft(con: sqlite3.Connection, document: dict) -> None:
+    if con.execute("SELECT 1 FROM sessions WHERE completed_at IS NULL").fetchone():
+        raise ValueError("finish the active session before replacing the plan")
+    con.execute("UPDATE routines SET active=0 WHERE active=1")
+    for plan_position,routine in enumerate(document["routines"],1):
+        existing=con.execute("SELECT id FROM routines WHERE name=?",(routine["name"],)).fetchone()
+        if existing:
+            routine_id=existing["id"]
+            con.execute("DELETE FROM routine_days WHERE routine_id=?",(routine_id,))
+            con.execute("DELETE FROM routine_exercises WHERE routine_id=?",(routine_id,))
+            con.execute("UPDATE routines SET active=1,notes='',plan_position=? WHERE id=?",(plan_position,routine_id))
+        else:
+            cur=con.execute("INSERT INTO routines(name,notes,plan_position,created_at) VALUES(?,?,?,?)",(routine["name"],"",plan_position,now()))
+            routine_id=cur.lastrowid
+        for day in routine["weekdays"]: con.execute("INSERT INTO routine_days(routine_id,weekday) VALUES(?,?)",(routine_id,day))
+        for position,exercise in enumerate(routine["exercises"],1):
+            cur=con.execute("INSERT INTO exercises(name) VALUES(?) ON CONFLICT(name) DO UPDATE SET active=1 RETURNING id",(exercise["name"],))
+            exercise_id=cur.fetchone()[0]
+            con.execute("INSERT INTO routine_exercises(routine_id,exercise_id,position,planned_sets,min_reps,max_reps) VALUES(?,?,?,?,?,?)",
+                        (routine_id,exercise_id,position,exercise["sets"],exercise["min_reps"],exercise["max_reps"]))
+
+
+def generate_plan(args, equipment: list[str]) -> dict:
+    return validate_plan_document(generate_curated_plan(
+        goal=args.goal,
+        days=args.day,
+        duration_minutes=args.duration,
+        experience=args.experience,
+        equipment=equipment,
+        focus=args.focus or [],
+        avoid=args.avoid or [],
+        restrictions=args.restriction or [],
+    ))
 
 
 class GymArgumentParser(argparse.ArgumentParser):
@@ -441,6 +623,12 @@ class GymArgumentParser(argparse.ArgumentParser):
 def safe_int(value: str) -> int:
     if len(value)>20 or re.fullmatch(r"[+-]?[0-9]+",value) is None: raise argparse.ArgumentTypeError("integer is invalid or too large")
     return int(value)
+
+
+def positive_int(value: str) -> int:
+    number=safe_int(value)
+    if number<1: raise argparse.ArgumentTypeError("index must be a positive integer")
+    return number
 
 
 class GymPilotServer(ThreadingHTTPServer):
@@ -642,6 +830,11 @@ def validate_arguments(args) -> None:
     text_limits={"name":200,"alias":200,"side":100,"notes":4000,"exercise_notes":4000,"value":1000}
     for field,value in vars(args).items():
         if value is None or isinstance(value,bool): continue
+        if isinstance(value,list):
+            if len(value)>100: raise ValueError(f"{field} has too many values")
+            if any(isinstance(item,str) and len(item)>1000 for item in value): raise ValueError(f"{field} value is too long")
+            continue
+        if field=="plan_json" and isinstance(value,str) and len(value)>100000: raise ValueError("plan_json is too long")
         if field in integer_limits and isinstance(value,int):
             low,high=integer_limits[field]
             if value < low or value > high: raise ValueError(f"{field} must be between {low} and {high}")
@@ -656,8 +849,92 @@ def command(args):
     if args.command=="status":
         with connect() as con: counts={t:con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("routines","exercises","equipment_aliases","sessions","workout_sets")}
         return {"ok":True,"schema_version":SCHEMA_VERSION,"data_dir":str(data_dir()),"database":str(db_path()),"auth_enabled":auth_enabled(),**counts}
+    if args.command=="studio-profile":
+        with connect() as con:
+            if args.action=="update":
+                equipment_values=args.equipment or []
+                unknown=sorted(set(equipment_values)-set(GENERATOR_EQUIPMENT))
+                if unknown: raise ValueError(f"unsupported equipment: {unknown}; supported values: {list(GENERATOR_EQUIPMENT)}")
+                equipment=sorted(set(equipment_values))
+                con.execute("UPDATE studio_profile SET equipment_json=?,updated_at=? WHERE id=1",(json.dumps(equipment,ensure_ascii=False,allow_nan=False),now()))
+                con.commit()
+            row=con.execute("SELECT equipment_json,updated_at FROM studio_profile WHERE id=1").fetchone()
+            return {"equipment":json.loads(row["equipment_json"]),"updated_at":row["updated_at"]}
+    if args.command=="draft":
+        if args.action=="capabilities": return generator_capabilities()
+        with connect() as con:
+            if args.action=="import":
+                document=validate_plan_document(strict_json_loads(args.plan_json.encode("utf-8")))
+                payload=canonical_plan_json(document); content_hash=hashlib.sha256(payload.encode()).hexdigest(); stamp=now()
+                con.execute("BEGIN IMMEDIATE")
+                current=con.execute("SELECT revision FROM plan_drafts WHERE id=1").fetchone()
+                if current and args.replace_revision is None: raise ValueError("existing draft requires --replace-revision")
+                if current and args.replace_revision!=current["revision"]: raise ValueError("draft revision mismatch")
+                revision=current["revision"]+1 if current else 1
+                con.execute("INSERT INTO plan_drafts(id,mode,payload_json,revision,content_hash,status,created_at,updated_at,confirmed_at) VALUES(1,'import',?,?,?,'draft',?,?,NULL) ON CONFLICT(id) DO UPDATE SET mode='import',payload_json=excluded.payload_json,revision=excluded.revision,content_hash=excluded.content_hash,status='draft',created_at=excluded.created_at,updated_at=excluded.updated_at,confirmed_at=NULL",
+                            (payload,revision,content_hash,stamp,stamp))
+            if args.action=="generate":
+                equipment=json.loads(con.execute("SELECT equipment_json FROM studio_profile WHERE id=1").fetchone()[0])
+                document=generate_plan(args,equipment); payload=canonical_plan_json(document); content_hash=hashlib.sha256(payload.encode()).hexdigest(); stamp=now()
+                con.execute("BEGIN IMMEDIATE")
+                current=con.execute("SELECT revision FROM plan_drafts WHERE id=1").fetchone()
+                if current and args.replace_revision is None: raise ValueError("existing draft requires --replace-revision")
+                if current and args.replace_revision!=current["revision"]: raise ValueError("draft revision mismatch")
+                revision=current["revision"]+1 if current else 1
+                con.execute("INSERT INTO plan_drafts(id,mode,payload_json,revision,content_hash,status,created_at,updated_at,confirmed_at) VALUES(1,'generate',?,?,?,'draft',?,?,NULL) ON CONFLICT(id) DO UPDATE SET mode='generate',payload_json=excluded.payload_json,revision=excluded.revision,content_hash=excluded.content_hash,status='draft',created_at=excluded.created_at,updated_at=excluded.updated_at,confirmed_at=NULL",
+                            (payload,revision,content_hash,stamp,stamp))
+            row=con.execute("SELECT * FROM plan_drafts WHERE id=1").fetchone()
+            if not row: raise ValueError("no plan draft exists")
+            if args.action=="discard":
+                con.execute("BEGIN IMMEDIATE")
+                row=con.execute("SELECT * FROM plan_drafts WHERE id=1").fetchone()
+                if row["revision"]!=args.revision: raise ValueError("draft revision mismatch")
+                if row["status"]!="draft": raise ValueError("only an active draft can be discarded")
+                con.execute("UPDATE plan_drafts SET status='discarded',updated_at=? WHERE id=1",(now(),))
+                con.commit()
+                return draft_result(con.execute("SELECT * FROM plan_drafts WHERE id=1").fetchone())
+            if args.action in {"routine-update","exercise-update"}:
+                con.execute("BEGIN IMMEDIATE")
+                row=con.execute("SELECT * FROM plan_drafts WHERE id=1").fetchone()
+                if row["revision"]!=args.revision: raise ValueError("draft revision mismatch")
+                if row["status"]!="draft": raise ValueError("confirmed plan drafts cannot be changed")
+                document=json.loads(row["payload_json"])
+                try: routine=document["routines"][args.routine_index-1]
+                except IndexError as exc: raise ValueError("draft routine index not found") from exc
+                if args.action=="routine-update":
+                    if args.name is not None: routine["name"]=args.name
+                    if args.day is not None: routine["weekdays"]=args.day
+                else:
+                    try: exercise=routine["exercises"][args.exercise_index-1]
+                    except IndexError as exc: raise ValueError("draft exercise index not found") from exc
+                    for field in ("name","sets","min_reps","max_reps"):
+                        value=getattr(args,field)
+                        if value is not None: exercise[field]=value
+                document=validate_plan_document(document); payload=canonical_plan_json(document); stamp=now()
+                if payload==row["payload_json"]: raise ValueError("draft change must alter the plan")
+                con.execute("UPDATE plan_drafts SET payload_json=?,revision=revision+1,content_hash=?,updated_at=? WHERE id=1",
+                            (payload,hashlib.sha256(payload.encode()).hexdigest(),stamp))
+                row=con.execute("SELECT * FROM plan_drafts WHERE id=1").fetchone()
+            if args.action=="confirm":
+                con.execute("BEGIN IMMEDIATE")
+                row=con.execute("SELECT * FROM plan_drafts WHERE id=1").fetchone()
+                if row["revision"]!=args.revision: raise ValueError("draft revision mismatch")
+                if not hmac.compare_digest(row["content_hash"],args.content_hash): raise ValueError("draft content hash mismatch")
+                if row["status"]!="draft": raise ValueError("plan draft is already confirmed")
+                document=validate_plan_document(strict_json_loads(row["payload_json"].encode("utf-8")))
+                canonical=canonical_plan_json(document)
+                if not hmac.compare_digest(hashlib.sha256(canonical.encode()).hexdigest(),row["content_hash"]):
+                    raise ValueError("stored draft content hash mismatch")
+                materialize_draft(con,document)
+                stamp=now(); con.execute("UPDATE plan_drafts SET status='confirmed',confirmed_at=?,updated_at=? WHERE id=1",(stamp,stamp))
+                con.commit()
+                result=draft_result(con.execute("SELECT * FROM plan_drafts WHERE id=1").fetchone()); result["materialized"]=True; result["materialized_plan"]=document
+                return result
+            return draft_result(row)
     if args.command=="onboarding":
         with connect() as con:
+            if args.action=="mode":
+                con.execute("INSERT INTO onboarding_state VALUES('setup_mode',?,?) ON CONFLICT(field) DO UPDATE SET value=excluded.value,confirmed_at=excluded.confirmed_at",(args.mode,now()))
             if args.action=="set":
                 con.execute("BEGIN IMMEDIATE")
                 answers={r[0]:r[1] for r in con.execute("SELECT field,value FROM onboarding_state")}
@@ -667,6 +944,9 @@ def command(args):
                 con.execute("INSERT INTO onboarding_state VALUES(?,?,?) ON CONFLICT(field) DO UPDATE SET value=excluded.value,confirmed_at=excluded.confirmed_at",(args.field,value,now()))
                 if args.field in PROFILE_ONBOARDING_FIELDS:
                     con.execute(f"UPDATE user_profile SET {args.field}=?,updated_at=? WHERE id=1",(value,now()))
+                status=onboarding_status(con)
+                if status["complete"]:
+                    materialize_onboarding_plan(con,status["answers"])
             return onboarding_status(con)
     if args.command=="routine":
         if args.action=="add":
@@ -675,7 +955,8 @@ def command(args):
                     conflict=con.execute("""SELECT r.name FROM routine_days d JOIN routines r ON r.id=d.routine_id
                         WHERE d.weekday=? AND r.active=1 LIMIT 1""",(day,)).fetchone()
                     if conflict: raise ValueError(f"weekday {day} is already assigned to active routine {conflict['name']}")
-                cur=con.execute("INSERT INTO routines(name,notes,created_at) VALUES(?,?,?)",(args.name,args.notes,now())); rid=cur.lastrowid
+                position=con.execute("SELECT COALESCE(MAX(plan_position),0)+1 FROM routines WHERE active=1").fetchone()[0]
+                cur=con.execute("INSERT INTO routines(name,notes,plan_position,created_at) VALUES(?,?,?,?)",(args.name,args.notes,position,now())); rid=cur.lastrowid
                 for day in sorted(set(args.weekday)): con.execute("INSERT INTO routine_days(routine_id,weekday) VALUES(?,?)",(rid,day))
                 con.commit()
                 result=dict(con.execute("SELECT * FROM routines WHERE id=?",(rid,)).fetchone())
@@ -801,7 +1082,7 @@ def command(args):
         target=parent/f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(4)}"; private_directory(target,require_new=True)
         with connect() as con:
             con.execute("BEGIN")
-            payload={t:rows(con.execute(f"SELECT * FROM {t}")) for t in ("user_profile","routines","routine_days","exercises","equipment_aliases","routine_exercises","sessions","workout_sets")}
+            payload={t:rows(con.execute(f"SELECT * FROM {t}")) for t in ("user_profile","routines","routine_days","exercises","equipment_aliases","routine_exercises","sessions","workout_sets","studio_profile","plan_drafts")}
             jp=target/"gympilot.json"
             with open_private_text(jp) as f: json.dump(payload,f,ensure_ascii=False,indent=2,allow_nan=False)
             cp=target/"sets.csv"; out=con.execute("SELECT s.session_date,r.name routine,e.name exercise,a.alias equipment,w.set_number,w.side,w.weight_kg,w.reps,w.rpe,w.notes FROM workout_sets w JOIN sessions s ON s.id=w.session_id JOIN routines r ON r.id=s.routine_id JOIN exercises e ON e.id=w.exercise_id LEFT JOIN equipment_aliases a ON a.id=w.equipment_alias_id ORDER BY s.id,w.id");
@@ -841,7 +1122,9 @@ def command(args):
 def parser():
     p=GymArgumentParser(description="GymPilot local workout tracker"); p.add_argument("--json",action="store_true"); sub=p.add_subparsers(dest="command",required=True)
     sub.add_parser("init"); sub.add_parser("status"); sub.add_parser("plan"); sub.add_parser("today")
-    o=sub.add_parser("onboarding"); osub=o.add_subparsers(dest="action",required=True); osub.add_parser("status"); s=osub.add_parser("set"); s.add_argument("field"); s.add_argument("value")
+    o=sub.add_parser("onboarding"); osub=o.add_subparsers(dest="action",required=True); osub.add_parser("status"); m=osub.add_parser("mode"); m.add_argument("mode",choices=("import","generate","manual")); s=osub.add_parser("set"); s.add_argument("field"); s.add_argument("value")
+    sp=sub.add_parser("studio-profile"); sps=sp.add_subparsers(dest="action",required=True); sps.add_parser("show"); u=sps.add_parser("update"); u.add_argument("--equipment",action="append")
+    d=sub.add_parser("draft"); ds=d.add_subparsers(dest="action",required=True); ds.add_parser("show"); ds.add_parser("capabilities"); discard=ds.add_parser("discard"); discard.add_argument("--revision",type=safe_int,required=True); i=ds.add_parser("import"); i.add_argument("plan_json"); i.add_argument("--replace-revision",type=safe_int); g=ds.add_parser("generate"); g.add_argument("--goal",required=True,choices=GENERATOR_GOALS); g.add_argument("--day",type=safe_int,action="append",required=True,choices=range(1,8)); g.add_argument("--duration",type=safe_int,required=True,choices=range(20,181)); g.add_argument("--experience",required=True,choices=GENERATOR_EXPERIENCE); g.add_argument("--focus",action="append",choices=GENERATOR_FOCUS_AREAS); g.add_argument("--avoid",action="append"); g.add_argument("--restriction",action="append",choices=GENERATOR_RESTRICTIONS); g.add_argument("--replace-revision",type=safe_int); ru=ds.add_parser("routine-update"); ru.add_argument("routine_index",type=positive_int); ru.add_argument("--name"); ru.add_argument("--day",type=safe_int,action="append",choices=range(1,8)); ru.add_argument("--revision",type=safe_int,required=True); eu=ds.add_parser("exercise-update"); eu.add_argument("routine_index",type=positive_int); eu.add_argument("exercise_index",type=positive_int); eu.add_argument("--name"); eu.add_argument("--sets",type=safe_int); eu.add_argument("--min-reps",type=safe_int); eu.add_argument("--max-reps",type=safe_int); eu.add_argument("--revision",type=safe_int,required=True); c=ds.add_parser("confirm"); c.add_argument("--revision",type=safe_int,required=True); c.add_argument("--content-hash",required=True)
     r=sub.add_parser("routine"); rs=r.add_subparsers(dest="action",required=True); rs.add_parser("list")
     a=rs.add_parser("add"); a.add_argument("name"); a.add_argument("--weekday",type=safe_int,action="append",required=True,choices=range(1,8)); a.add_argument("--notes",default="")
     a=rs.add_parser("update"); a.add_argument("id",type=safe_int); a.add_argument("--name"); a.add_argument("--weekday",type=safe_int,action="append",choices=range(1,8)); a.add_argument("--notes")

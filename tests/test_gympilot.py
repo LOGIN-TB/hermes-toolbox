@@ -63,16 +63,303 @@ class GymPilotTest(unittest.TestCase):
             "--min-reps", low, "--max-reps", high,
         )[1]
 
+    def sample_plan(self, name="Ganzkörper", day=1, sets=3):
+        return {"routines": [{"name": name, "weekdays": [day], "exercises": [
+            {"name": "Kniebeuge", "sets": sets, "min_reps": 5, "max_reps": 8}
+        ]}]}
+
+    def confirm_draft(self, draft):
+        return self.cli("draft", "confirm", "--revision", draft["revision"],
+                        "--content-hash", draft["content_hash"])[1]
+
+    def test_draft_has_monotone_revision_and_hash_of_canonical_plan_json(self):
+        source = self.sample_plan()
+        first = self.cli("draft", "import", json.dumps(source, indent=2))[1]
+        canonical = json.dumps(source, ensure_ascii=False, allow_nan=False,
+                               sort_keys=True, separators=(",", ":"))
+        self.assertEqual(first["revision"], 1)
+        self.assertEqual(first["content_hash"], __import__("hashlib").sha256(canonical.encode()).hexdigest())
+        replacement = self.cli("draft", "import", json.dumps(self.sample_plan(day=2)),
+                               "--replace-revision", first["revision"])[1]
+        self.assertEqual(replacement["revision"], 2)
+        self.assertNotEqual(replacement["content_hash"], first["content_hash"])
+
+    def test_draft_confirm_requires_matching_revision_and_content_hash(self):
+        draft = self.cli("draft", "import", json.dumps(self.sample_plan()))[1]
+        missing, _ = self.cli("draft", "confirm", check=False)
+        self.assertEqual(missing.returncode, 2)
+        stale, payload = self.cli("draft", "confirm", "--revision", draft["revision"] + 1,
+                                  "--content-hash", draft["content_hash"], check=False)
+        self.assertEqual(stale.returncode, 2)
+        self.assertIn("revision", payload["error"])
+        wrong_hash, payload = self.cli("draft", "confirm", "--revision", draft["revision"],
+                                       "--content-hash", "0" * 64, check=False)
+        self.assertEqual(wrong_hash.returncode, 2)
+        self.assertIn("hash", payload["error"])
+        self.assertEqual(self.cli("draft", "show")[1]["status"], "draft")
+
+    def test_draft_discard_requires_revision_and_preserves_plan_and_history(self):
+        routine = self.routine("Alt", 1)
+        exercise = self.exercise(routine["id"])
+        session = self.cli("session", "start", "--routine", routine["id"], "--date", "2026-01-01")[1]
+        logged = self.cli("set", "log", session["id"], exercise["id"], "--weight", 40, "--reps", 8)[1]
+        self.cli("session", "finish", session["id"])
+        draft = self.cli("draft", "import", json.dumps(self.sample_plan("Neu", 2)))[1]
+        missing, _ = self.cli("draft", "discard", check=False)
+        self.assertEqual(missing.returncode, 2)
+        stale, payload = self.cli("draft", "discard", "--revision", draft["revision"] + 1, check=False)
+        self.assertEqual(stale.returncode, 2)
+        self.assertIn("revision", payload["error"])
+        discarded = self.cli("draft", "discard", "--revision", draft["revision"])[1]
+        self.assertEqual(discarded["status"], "discarded")
+        self.assertEqual(self.cli("plan")[1][0]["name"], "Alt")
+        with sqlite3.connect(self.home / "gympilot" / "gympilot.db") as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM sessions WHERE id=?", (session["id"],)).fetchone()[0], 1)
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM workout_sets WHERE id=?", (logged["id"],)).fetchone()[0], 1)
+
+    def test_confirm_returns_canonical_materialized_plan_exactly_matching_draft(self):
+        source = {"routines": [
+            {"name": "Zuerst", "weekdays": [4], "exercises": [
+                {"name": "Rudern", "sets": 3, "min_reps": 8, "max_reps": 12}
+            ]},
+            {"name": "Danach", "weekdays": [1], "exercises": [
+                {"name": "Kniebeuge", "sets": 3, "min_reps": 5, "max_reps": 8}
+            ]},
+        ]}
+        draft = self.cli("draft", "import", json.dumps(source))[1]
+        confirmed = self.confirm_draft(draft)
+        self.assertEqual(confirmed["materialized_plan"], draft["plan"])
+        self.assertEqual(confirmed["plan"], draft["plan"])
+        _, saved = self.cli("plan")
+        self.assertIsNotNone(saved)
+        assert saved is not None
+        self.assertEqual([routine["name"] for routine in saved], ["Zuerst", "Danach"])
+
+    def test_draft_payload_strict_json_bounds_depth_integers_fields_and_types(self):
+        valid = self.sample_plan()
+        malformed = [
+            json.dumps({**valid, "unknown": True}),
+            json.dumps({"routines": [{**valid["routines"][0], "unknown": 1}]}),
+            json.dumps({"routines": [{**valid["routines"][0], "name": 7}]}),
+            '{"routines":[{"name":"X","weekdays":[1],"exercises":[{"name":"Y","sets":' + "9" * 100 + ',"min_reps":1,"max_reps":2}]}]}',
+            json.dumps({**valid, "generation": {"unknown": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}}),
+        ]
+        for raw in malformed:
+            result, payload = self.cli("draft", "import", raw, check=False)
+            self.assertEqual(result.returncode, 2, raw[:100])
+            self.assertTrue(payload["error"])
+        oversized, payload = self.cli("draft", "import", " " * 100001, check=False)
+        self.assertEqual(oversized.returncode, 2)
+        self.assertIn("too long", payload["error"])
+
+    def test_structurally_invalid_weekdays_return_json_error_without_traceback(self):
+        invalid = self.sample_plan()
+        invalid["routines"][0]["weekdays"] = [[1]]
+        result, payload = self.cli("draft", "import", json.dumps(invalid), check=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("weekdays", payload["error"])
+
+    def test_v1_to_v2_migration_preserves_sentinels_without_inventing_draft_or_equipment_and_newer_fails_closed(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        data = self.home / "gympilot"
+        data.mkdir(parents=True)
+        db = data / "gympilot.db"
+        with sqlite3.connect(db) as con:
+            con.executescript(gym.MIGRATIONS[1])
+            con.execute("INSERT INTO schema_migrations VALUES(1,'sentinel-time')")
+            con.execute("INSERT INTO user_profile(id,display_name,updated_at) VALUES(1,'Sentinel User','t')")
+            routine = con.execute("INSERT INTO routines(name,created_at) VALUES('Sentinel Routine','t')").lastrowid
+            exercise = con.execute("INSERT INTO exercises(name) VALUES('Sentinel Exercise')").lastrowid
+            alias = con.execute("INSERT INTO equipment_aliases(exercise_id,alias,created_at) VALUES(?,?,?)", (exercise, "Sentinel Alias", "t")).lastrowid
+            session = con.execute("INSERT INTO sessions(routine_id,session_date,started_at,completed_at) VALUES(?,?,?,?)", (routine, "2026-01-01", "t", "t")).lastrowid
+            con.execute("INSERT INTO workout_sets(session_id,exercise_id,equipment_alias_id,set_number,weight_kg,reps,recorded_at) VALUES(?,?,?,?,?,?,?)", (session, exercise, alias, 1, 42.0, 7, "t"))
+            con.execute("PRAGMA user_version=1")
+        gym.initialize()
+        with sqlite3.connect(db) as con:
+            self.assertEqual(con.execute("SELECT display_name FROM user_profile").fetchone()[0], "Sentinel User")
+            self.assertEqual(con.execute("SELECT alias FROM equipment_aliases").fetchone()[0], "Sentinel Alias")
+            self.assertEqual(con.execute("SELECT weight_kg,reps FROM workout_sets").fetchone(), (42.0, 7))
+            self.assertEqual(con.execute("SELECT equipment_json FROM studio_profile").fetchone()[0], "[]")
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM plan_drafts").fetchone()[0], 0)
+        newer_home = Path(self.tmp.name) / "newer"
+        (newer_home / "gympilot").mkdir(parents=True)
+        with sqlite3.connect(newer_home / "gympilot" / "gympilot.db") as con:
+            con.execute("PRAGMA user_version=99")
+        os.environ["HERMES_HOME"] = str(newer_home)
+        with self.assertRaisesRegex(ValueError, "newer|version"):
+            gym.initialize()
+
+    def test_v1_to_v2_migration_recovers_from_interrupted_column_addition(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        data = self.home / "gympilot"
+        data.mkdir(parents=True)
+        db = data / "gympilot.db"
+        with sqlite3.connect(db) as con:
+            con.executescript(gym.MIGRATIONS[1])
+            con.execute("INSERT INTO schema_migrations VALUES(1,'sentinel-time')")
+            con.execute("INSERT INTO routines(name,created_at) VALUES('Vorhanden','t')")
+            con.execute("ALTER TABLE routines ADD COLUMN plan_position INTEGER NOT NULL DEFAULT 0 CHECK(plan_position>=0)")
+            con.execute("PRAGMA user_version=1")
+        gym.initialize()
+        gym.initialize()
+        with sqlite3.connect(db) as con:
+            columns = [row[1] for row in con.execute("PRAGMA table_info(routines)")]
+            self.assertEqual(columns.count("plan_position"), 1)
+            self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(con.execute("SELECT plan_position FROM routines WHERE name='Vorhanden'").fetchone()[0], 1)
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM plan_drafts").fetchone()[0], 0)
+
+    def test_skill_links_every_direct_install_runtime_asset(self):
+        skill = (ROOT / "skills" / "gym" / "SKILL.md").read_text(encoding="utf-8")
+        expected = {
+            "scripts/gympilot.py",
+            "scripts/gympilot_generator.py",
+            "assets/web/index.html",
+            "assets/web/app.js",
+            "assets/web/styles.css",
+            "assets/web/manifest.webmanifest",
+            "assets/web/service-worker.js",
+            "assets/web/icons/icon-192.png",
+            "assets/web/icons/icon-512.png",
+            "assets/web/icons/apple-touch-icon.png",
+            "assets/web/icons/favicon-32.png",
+            "assets/web/icons/icon.svg",
+        }
+        for relative in expected:
+            self.assertIn(f"]({relative})", skill, relative)
+            self.assertTrue((ROOT / "skills" / "gym" / relative).is_file(), relative)
+
+    def test_export_json_explicitly_includes_studio_profile_and_plan_drafts(self):
+        self.cli("studio-profile", "update", "--equipment", "dumbbell")
+        draft = self.cli("draft", "import", json.dumps(self.sample_plan()))[1]
+        exported = self.cli("export")[1]
+        payload = json.loads(Path(exported["json"]).read_text(encoding="utf-8"))
+        self.assertEqual(json.loads(payload["studio_profile"][0]["equipment_json"]), ["dumbbell"])
+        self.assertEqual(payload["plan_drafts"][0]["revision"], draft["revision"])
+        self.assertEqual(payload["plan_drafts"][0]["content_hash"], draft["content_hash"])
+
+    def test_show_is_read_only_and_import_does_not_silently_overwrite(self):
+        draft = self.cli("draft", "import", json.dumps(self.sample_plan()))[1]
+        db = self.home / "gympilot" / "gympilot.db"
+        with sqlite3.connect(db) as con:
+            before = list(con.iterdump())
+        shown = self.cli("draft", "show")[1]
+        with sqlite3.connect(db) as con:
+            after = list(con.iterdump())
+        self.assertEqual(shown, draft)
+        self.assertEqual(after, before)
+        rejected, payload = self.cli("draft", "import", json.dumps(self.sample_plan(day=2)), check=False)
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("replace-revision", payload["error"])
+        stale, payload = self.cli("draft", "import", json.dumps(self.sample_plan(day=2)),
+                                  "--replace-revision", draft["revision"] + 1, check=False)
+        self.assertEqual(stale.returncode, 2)
+        self.assertIn("revision", payload["error"])
+        self.assertEqual(self.cli("draft", "show")[1], draft)
+
+    def test_parallel_confirm_allows_exactly_one_winner(self):
+        draft = self.cli("draft", "import", json.dumps(self.sample_plan()))[1]
+        barrier = threading.Barrier(2)
+        def confirm(_):
+            barrier.wait()
+            return subprocess.run([
+                sys.executable, str(CLI), "--json", "draft", "confirm",
+                "--revision", str(draft["revision"]), "--content-hash", draft["content_hash"],
+            ], env=self.env, text=True, capture_output=True)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(confirm, range(2)))
+        self.assertEqual(sorted(result.returncode for result in results), [0, 2])
+        self.assertEqual(self.cli("draft", "show")[1]["status"], "confirmed")
+        self.assertEqual(len(self.cli("plan")[1]), 1)
+
+    def test_confirm_active_session_rolls_back_plan_and_draft_completely(self):
+        old = self.routine("Alt", 1)
+        exercise = self.exercise(old["id"])
+        session = self.cli("session", "start", "--routine", old["id"])[1]
+        self.cli("set", "log", session["id"], exercise["id"], "--weight", 40, "--reps", 8)
+        draft = self.cli("draft", "import", json.dumps(self.sample_plan("Neu", 2)))[1]
+        db = self.home / "gympilot" / "gympilot.db"
+        with sqlite3.connect(db) as con:
+            before = list(con.iterdump())
+        blocked, payload = self.cli("draft", "confirm", "--revision", draft["revision"],
+                                    "--content-hash", draft["content_hash"], check=False)
+        self.assertEqual(blocked.returncode, 2)
+        self.assertIn("active session", payload["error"])
+        with sqlite3.connect(db) as con:
+            self.assertEqual(list(con.iterdump()), before)
+        self.assertEqual(self.cli("draft", "show")[1]["status"], "draft")
+        self.assertEqual(self.cli("plan")[1][0]["name"], "Alt")
+
+    def test_structured_draft_update_uses_revision_cas_and_rehashes_content(self):
+        draft = self.cli("draft", "import", json.dumps(self.sample_plan()))[1]
+        missing, _ = self.cli("draft", "routine-update", 1, "--day", 2, check=False)
+        self.assertEqual(missing.returncode, 2)
+        changed = self.cli("draft", "routine-update", 1, "--day", 2,
+                           "--revision", draft["revision"])[1]
+        self.assertEqual(changed["revision"], draft["revision"] + 1)
+        self.assertNotEqual(changed["content_hash"], draft["content_hash"])
+        stale, payload = self.cli("draft", "exercise-update", 1, 1, "--sets", 4,
+                                  "--revision", draft["revision"], check=False)
+        self.assertEqual(stale.returncode, 2)
+        self.assertIn("revision", payload["error"])
+
+    def test_draft_indices_and_noop_updates_fail_closed(self):
+        source = {"routines": [
+            {"name": "A", "weekdays": [1], "exercises": [
+                {"name": "A1", "sets": 3, "min_reps": 8, "max_reps": 12}
+            ]},
+            {"name": "B", "weekdays": [2], "exercises": [
+                {"name": "B1", "sets": 3, "min_reps": 8, "max_reps": 12}
+            ]},
+        ]}
+        draft = self.cli("draft", "import", json.dumps(source))[1]
+        self.assertIsNotNone(draft)
+        assert draft is not None
+        for args in (
+            ("draft", "routine-update", 0, "--name", "Falsch", "--revision", draft["revision"]),
+            ("draft", "routine-update", -1, "--name", "Falsch", "--revision", draft["revision"]),
+            ("draft", "exercise-update", 1, 0, "--name", "Falsch", "--revision", draft["revision"]),
+            ("draft", "exercise-update", 1, -1, "--name", "Falsch", "--revision", draft["revision"]),
+        ):
+            result, payload = self.cli(*args, check=False)
+            self.assertEqual(result.returncode, 2)
+            self.assertIsNotNone(payload)
+        self.assertEqual(self.cli("draft", "show")[1], draft)
+        result, payload = self.cli(
+            "draft", "routine-update", 1, "--revision", draft["revision"], check=False
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertIn("change", payload["error"])
+        self.assertEqual(self.cli("draft", "show")[1], draft)
+
+    def test_confirm_revalidates_stored_payload_hash_inside_transaction(self):
+        draft = self.cli("draft", "import", json.dumps(self.sample_plan()))[1]
+        tampered = self.sample_plan(day=2)
+        with sqlite3.connect(self.home / "gympilot" / "gympilot.db") as con:
+            con.execute("UPDATE plan_drafts SET payload_json=? WHERE id=1", (json.dumps(tampered),))
+        rejected, payload = self.cli("draft", "confirm", "--revision", draft["revision"],
+                                     "--content-hash", draft["content_hash"], check=False)
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("hash", payload["error"])
+        self.assertEqual(self.cli("plan")[1], [])
+
     def test_fresh_profile_schema_constraints_and_status(self):
         _, created = self.cli("init")
-        self.assertEqual(created["schema_version"], 1)
+        self.assertEqual(created["schema_version"], 2)
         db = self.home / "gympilot" / "gympilot.db"
         self.assertTrue(db.is_file())
         self.assertFalse((ROOT / "skills" / "gym" / "gympilot.db").exists())
         with sqlite3.connect(db) as con:
             tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            self.assertTrue({"schema_migrations", "user_profile", "onboarding_state", "routines", "routine_days", "exercises", "equipment_aliases", "routine_exercises", "sessions", "workout_sets", "auth_config", "web_sessions"} <= tables)
-            self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertTrue({"schema_migrations", "user_profile", "onboarding_state", "studio_profile", "plan_drafts", "routines", "routine_days", "exercises", "equipment_aliases", "routine_exercises", "sessions", "workout_sets", "auth_config", "web_sessions"} <= tables)
+            self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], 2)
             side = next(r for r in con.execute("PRAGMA table_info(workout_sets)") if r[1] == "side")
             self.assertEqual(side[3], 1)
             self.assertEqual(side[4], "''")
@@ -121,6 +408,29 @@ class GymPilotTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("already complete", payload["error"])
         self.assertEqual(len(self.cli("plan")[1]), 1)
+
+    def test_complete_manual_onboarding_status_is_read_only(self):
+        self.cli("init")
+        values = [
+            ("display_name", "Alex"), ("locale", "de"), ("units", "metric"), ("goal", "Kraft"),
+            ("routine_count", "1"), ("routine_1_name", "Ganzkörper"), ("routine_1_weekdays", "1"),
+            ("routine_1_exercise_count", "1"), ("routine_1_exercise_1_name", "Kniebeuge"),
+            ("routine_1_exercise_1_sets", "3"), ("routine_1_exercise_1_min_reps", "5"),
+        ]
+        for field, value in values:
+            self.cli("onboarding", "set", field, value)
+        db = self.home / "gympilot" / "gympilot.db"
+        with sqlite3.connect(db) as con:
+            con.execute(
+                "INSERT INTO onboarding_state(field,value,confirmed_at) VALUES(?,?,?)",
+                ("routine_1_exercise_1_max_reps", "8", "2026-01-01T00:00:00Z"),
+            )
+        _, status = self.cli("onboarding", "status")
+        self.assertIsNotNone(status)
+        assert status is not None
+        self.assertTrue(status["complete"])
+        self.assertNotIn("plan_materialized", status["answers"])
+        self.assertEqual(self.cli("plan")[1], [])
 
     def test_concurrent_final_onboarding_answer_is_atomic(self):
         self.cli("init")
@@ -608,6 +918,162 @@ class GymPilotTest(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(5)
+
+    def test_confirming_a_new_draft_can_reuse_existing_routine_names(self):
+        plan = {"routines": [{"name": "Ganzkörper", "weekdays": [1], "exercises": [
+            {"name": "Kniebeuge", "sets": 3, "min_reps": 5, "max_reps": 8}
+        ]}]}
+        first = self.cli("draft", "import", json.dumps(plan))[1]
+        self.confirm_draft(first)
+        plan["routines"][0]["weekdays"] = [2]
+        plan["routines"][0]["exercises"][0]["sets"] = 4
+        second = self.cli("draft", "import", json.dumps(plan), "--replace-revision", first["revision"])[1]
+        self.confirm_draft(second)
+        current = self.cli("plan")[1]
+        self.assertEqual(len(current), 1)
+        self.assertEqual(current[0]["weekdays"], [2])
+        self.assertEqual(current[0]["exercises"][0]["planned_sets"], 4)
+
+    def test_onboarding_exposes_and_persists_three_setup_modes(self):
+        status = self.cli("onboarding", "status")[1]
+        self.assertEqual(status["setup_modes"], ["import", "generate", "manual"])
+        selected = self.cli("onboarding", "mode", "generate")[1]
+        self.assertEqual(selected["selected_mode"], "generate")
+        self.assertEqual(self.cli("onboarding", "status")[1]["selected_mode"], "generate")
+
+    def test_structured_draft_updates_preserve_history_on_atomic_replacement(self):
+        old = self.routine("Alt", 1)
+        exercise = self.exercise(old["id"], "Press")
+        session = self.cli("session", "start", "--routine", old["id"], "--date", "2026-01-01")[1]
+        logged = self.cli("set", "log", session["id"], exercise["id"], "--weight", 40, "--reps", 8)[1]
+        self.cli("session", "finish", session["id"])
+        source = {"routines": [{"name": "Neu", "weekdays": [2], "exercises": [
+            {"name": "Kniebeuge", "sets": 3, "min_reps": 5, "max_reps": 8}
+        ]}]}
+        draft = self.cli("draft", "import", json.dumps(source))[1]
+        changed = self.cli("draft", "routine-update", 1, "--name", "Neu 2", "--day", 3, "--revision", draft["revision"])[1]
+        self.assertEqual(changed["plan"]["routines"][0]["name"], "Neu 2")
+        changed = self.cli("draft", "exercise-update", 1, 1, "--sets", 4, "--min-reps", 6, "--max-reps", 10, "--revision", changed["revision"])[1]
+        self.assertEqual(changed["plan"]["routines"][0]["exercises"][0]["sets"], 4)
+        self.confirm_draft(changed)
+        with sqlite3.connect(self.home / "gympilot" / "gympilot.db") as con:
+            self.assertEqual(con.execute("SELECT routine_id,session_date FROM sessions WHERE id=?", (session["id"],)).fetchone(), (old["id"], "2026-01-01"))
+            self.assertEqual(con.execute("SELECT session_id,weight_kg,reps FROM workout_sets WHERE id=?", (logged["id"],)).fetchone(), (session["id"], 40.0, 8))
+
+    def test_generator_is_deterministic_local_and_uses_all_preferences(self):
+        self.cli("studio-profile", "update", "--equipment", "barbell", "--equipment", "bench", "--equipment", "dumbbell")
+        args = ("draft", "generate", "--goal", "muscle_gain", "--day", 1, "--day", 4,
+                "--duration", 45, "--experience", "intermediate", "--focus", "chest",
+                "--avoid", "Push-up", "--restriction", "no_overhead")
+        first = self.cli(*args)[1]
+        second = self.cli(*args, "--replace-revision", first["revision"])[1]
+        self.assertEqual(first["plan"], second["plan"])
+        metadata = first["plan"]["generation"]
+        self.assertEqual(metadata["goal"], "muscle_gain")
+        self.assertEqual(metadata["days"], [1, 4])
+        self.assertEqual(metadata["duration_minutes"], 45)
+        self.assertEqual(metadata["experience"], "intermediate")
+        self.assertEqual(metadata["preferred_body_areas"], ["chest"])
+        self.assertEqual(metadata["avoided_exercises"], ["push_up"])
+        self.assertEqual(metadata["restrictions"], ["no_overhead"])
+        self.assertEqual(metadata["equipment"], ["barbell", "bench", "dumbbell"])
+        names = [exercise["name"] for routine in first["plan"]["routines"] for exercise in routine["exercises"]]
+        self.assertIn("Langhantel-Bankdrücken", names)
+        self.assertNotIn("Push-up", names)
+        self.assertEqual(len(first["plan"]["routines"]), 2)
+
+    def test_generator_supports_all_goals_and_rejects_duplicate_days(self):
+        revision = None
+        for goal in ("muscle_gain", "strength", "general_fitness", "weight_loss"):
+            args = ["draft", "generate", "--goal", goal, "--day", 2, "--duration", 30,
+                    "--experience", "beginner"]
+            if revision is not None: args += ["--replace-revision", revision]
+            result = self.cli(*args)[1]
+            revision = result["revision"]
+            self.assertEqual(result["plan"]["generation"]["goal"], goal)
+        rejected, payload = self.cli("draft", "generate", "--goal", "strength", "--day", 2, "--day", 2,
+                                     "--duration", 30, "--experience", "beginner", check=False)
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("unique", payload["error"])
+        rejected, payload = self.cli("draft", "generate", "--goal", "strength", "--day", 2,
+                                     "--duration", 30, "--experience", "beginner", "--restriction", "unknown", check=False)
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("invalid choice", payload["error"])
+
+    def test_cli_generator_uses_curated_splits_and_controlled_studio_vocabulary(self):
+        equipment = ("barbell", "bench", "cable", "dumbbell", "machines", "rack")
+        self.cli("studio-profile", "update", *(part for item in equipment for part in ("--equipment", item)))
+        _, draft = self.cli(
+            "draft", "generate", "--goal", "strength",
+            "--day", 1, "--day", 2, "--day", 4, "--day", 5,
+            "--duration", 90, "--experience", "advanced", "--focus", "chest",
+        )
+        self.assertIsNotNone(draft)
+        assert draft is not None
+        self.assertEqual(
+            [routine["name"] for routine in draft["plan"]["routines"]],
+            ["Oberkörper A", "Unterkörper A", "Oberkörper B", "Unterkörper B"],
+        )
+        metadata = draft["plan"]["generation"]
+        self.assertEqual(metadata["generator_version"], "curated-local-v2")
+        self.assertLessEqual(metadata["estimated_duration_minutes"], 90)
+        rejected, payload = self.cli(
+            "studio-profile", "update", "--equipment", "dumbells", check=False
+        )
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertIn("unsupported equipment", payload["error"])
+
+    def test_imported_draft_resumes_previews_and_materializes_only_on_confirm(self):
+        plan = {"routines": [{"name": "Ganzkörper", "weekdays": [1, 4], "exercises": [
+            {"name": "Kniebeuge", "sets": 3, "min_reps": 5, "max_reps": 8}
+        ]}]}
+        draft = self.cli("draft", "import", json.dumps(plan))[1]
+        self.assertEqual(draft["mode"], "import")
+        self.assertEqual(self.cli("plan")[1], [])
+        resumed = self.cli("draft", "show")[1]
+        self.assertEqual(resumed["plan"], plan)
+        confirmed = self.confirm_draft(draft)
+        self.assertTrue(confirmed["materialized"])
+        self.assertEqual(self.cli("plan")[1][0]["exercises"][0]["name"], "Kniebeuge")
+        again, payload = self.cli("draft", "confirm", "--revision", confirmed["revision"],
+                                  "--content-hash", confirmed["content_hash"], check=False)
+        self.assertEqual(again.returncode, 2)
+        self.assertIn("already confirmed", payload["error"])
+
+    def test_imported_draft_rejects_nonstandard_or_invalid_plan_json(self):
+        for raw in (
+            '{"routines":NaN}',
+            '{"routines":[],"routines":[]}',
+            json.dumps({"routines": [{"name": "X", "weekdays": [1, 1], "exercises": []}]}),
+            json.dumps({"routines": [{"name": "X", "weekdays": [1], "exercises": [{"name": "Y", "sets": 3, "min_reps": 9, "max_reps": 8}]}]}),
+        ):
+            result, payload = self.cli("draft", "import", raw, check=False)
+            self.assertEqual(result.returncode, 2, raw)
+            self.assertTrue(payload["error"])
+
+    def test_bulk_text_inputs_are_bounded(self):
+        rejected, payload = self.cli("studio-profile", "update", "--equipment", "x" * 1001, check=False)
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("too long", payload["error"])
+
+    def test_equipment_profile_is_persistent_and_editable_via_cli(self):
+        created = self.cli("studio-profile", "update", "--equipment", "barbell", "--equipment", "bench")[1]
+        self.assertEqual(created["equipment"], ["barbell", "bench"])
+        updated = self.cli("studio-profile", "update", "--equipment", "dumbbell")[1]
+        self.assertIsNotNone(updated)
+        assert updated is not None
+        self.assertEqual(updated["equipment"], ["dumbbell"])
+        self.assertEqual(self.cli("studio-profile", "show")[1], updated)
+        cleared = self.cli("studio-profile", "update")[1]
+        self.assertIsNotNone(cleared)
+        assert cleared is not None
+        self.assertEqual(cleared["equipment"], [])
+        self.assertEqual(self.cli("studio-profile", "show")[1]["equipment"], [])
+        with sqlite3.connect(self.home / "gympilot" / "gympilot.db") as con:
+            self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM plan_drafts").fetchone()[0], 0)
 
 
 if __name__ == "__main__":
