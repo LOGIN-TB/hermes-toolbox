@@ -78,6 +78,8 @@ python3 skills/gym/scripts/gympilot.py server
 
 Die Web-App läuft anschließend unter <http://127.0.0.1:8765>. Für maschinenlesbare Ausgaben steht `--json` direkt vor dem jeweiligen Befehl.
 
+Die Erfassung von Einheiten, Sätzen, Gewichten und Wiederholungen erfolgt ausschließlich über Telegram/Hermes. Die Web-App ist eine reine Auswertungsoberfläche. Nach einem erfolgreichen Abruf speichert sie einen vollständigen, maximal 2 MB großen Auswertungs-Snapshot in IndexedDB. Ohne Serververbindung bleiben Plan, letzte Satzwerte, Verlauf und Kennzahlen mit einem sichtbaren Zeitstempel (`Offline · Stand …`) lesbar. Beim nächsten Online-Abruf wird der Snapshot vollständig ersetzt; es gibt keine Offline-Erfassung und keine Mutationswarteschlange. Bei aktiviertem Dashboard-Passwort werden keine Offline-Auswertungen gespeichert, und ein Logout löscht einen vorhandenen Snapshot.
+
 Browser behandeln Loopback als sicheren Kontext; dort kann der Service Worker registriert werden. Ein Telefonzugriff auf eine private LAN- oder VPN-Adresse über das eingebaute HTTP ist dagegen nur ein mobiles Web-Dashboard: Browser installieren daraus üblicherweise keine PWA. Für eine Installation auf dem Telefon ist zusätzlich ein privat betriebener, vom Telefon als vertrauenswürdig eingestufter HTTPS-Endpunkt erforderlich. GymPilot bringt bewusst keinen TLS- oder öffentlichen Tunnelbetrieb mit.
 
 Häufig verwendete Befehle:

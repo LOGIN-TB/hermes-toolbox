@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 let displayUnits = 'metric';
 let dashboardData = null;
+let dashboardResult = null;
 const dayNames = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
 const dayShort = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const number = (value, digits = 1) => new Intl.NumberFormat('de-DE', {maximumFractionDigits: digits}).format(Number(value) || 0);
@@ -15,11 +16,133 @@ const longDate = value => new Intl.DateTimeFormat('de-DE', {weekday: 'long', day
 async function api(path, options = {}) {
   const response = await fetch(path, {cache: 'no-store', credentials: 'same-origin', ...options});
   if (response.status === 401) {
+    await clearDashboardSnapshot(dashboardStore);
     if (!$('login').open) $('login').showModal();
     throw new Error('login required');
   }
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return response.json();
+}
+
+const OFFLINE_SNAPSHOT_VERSION = 1;
+const OFFLINE_SNAPSHOT_MAX_BYTES = 2_000_000;
+
+function createDashboardStore(driver) {
+  const key = 'latest';
+  return {
+    read: () => driver.get(key),
+    async write(snapshot) {
+      const bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
+      if (bytes > OFFLINE_SNAPSHOT_MAX_BYTES) throw new Error('Offline-Snapshot ist zu groß.');
+      await driver.put(key, snapshot);
+    },
+    clear: () => driver.delete(key),
+  };
+}
+
+function createIndexedDbDriver(factory) {
+  let databasePromise;
+  const openDatabase = () => {
+    if (!factory) return Promise.reject(new Error('IndexedDB ist nicht verfügbar.'));
+    if (!databasePromise) databasePromise = new Promise((resolve, reject) => {
+      const request = factory.open('gympilot-dashboard', 1);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains('snapshots')) database.createObjectStore('snapshots');
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('IndexedDB konnte nicht geöffnet werden.'));
+      request.onblocked = () => reject(new Error('IndexedDB-Aktualisierung ist blockiert.'));
+    });
+    return databasePromise;
+  };
+  const transact = async (mode, operation) => {
+    const database = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction('snapshots', mode);
+      const request = operation(transaction.objectStore('snapshots'));
+      transaction.oncomplete = () => resolve(request.result ?? null);
+      transaction.onerror = () => reject(transaction.error || request.error || new Error('IndexedDB-Transaktion fehlgeschlagen.'));
+      transaction.onabort = () => reject(transaction.error || new Error('IndexedDB-Transaktion wurde abgebrochen.'));
+    });
+  };
+  return {
+    get: key => transact('readonly', store => store.get(key)),
+    put: (key, value) => transact('readwrite', store => store.put(value, key)),
+    delete: key => transact('readwrite', store => store.delete(key)),
+  };
+}
+
+const dashboardStore = createDashboardStore(createIndexedDbDriver(globalThis.indexedDB));
+
+async function clearDashboardSnapshot(store = dashboardStore) {
+  try { await store.clear(); }
+  catch (error) { console.warn('Offline-Snapshot konnte nicht gelöscht werden.', error); }
+}
+
+function validDashboardSnapshot(snapshot) {
+  return Boolean(snapshot && snapshot.version === OFFLINE_SNAPSHOT_VERSION &&
+    typeof snapshot.saved_at === 'string' && !Number.isNaN(Date.parse(snapshot.saved_at)) &&
+    snapshot.health && snapshot.health.auth_required === false &&
+    snapshot.today && Array.isArray(snapshot.today.plan) && snapshot.today.profile &&
+    snapshot.overview && typeof snapshot.overview.date === 'string' &&
+    snapshot.routines && typeof snapshot.routines === 'object' && !Array.isArray(snapshot.routines));
+}
+
+function isNetworkFailure(error) {
+  return error instanceof TypeError && !Object.hasOwn(error, 'status');
+}
+
+async function resolveDashboardSnapshot(fetchLive, store, clock = () => new Date()) {
+  try {
+    const live = await fetchLive();
+    const snapshot = {...live, version: OFFLINE_SNAPSHOT_VERSION, saved_at: clock().toISOString()};
+    try {
+      if (snapshot.health.auth_required) await store.clear();
+      else await store.write(snapshot);
+    } catch (cacheError) {
+      console.warn('Offline-Snapshot konnte nicht gespeichert werden.', cacheError);
+    }
+    return {snapshot, offline: false};
+  } catch (error) {
+    if (!isNetworkFailure(error)) throw error;
+    let cached;
+    try { cached = await store.read(); }
+    catch (cacheError) {
+      console.warn('Offline-Snapshot konnte nicht gelesen werden.', cacheError);
+      throw error;
+    }
+    if (!validDashboardSnapshot(cached)) throw error;
+    return {snapshot: cached, offline: true};
+  }
+}
+
+function dashboardStatusText(result) {
+  if (!result.offline) return 'Aktuell';
+  const stamp = new Date(result.snapshot.saved_at);
+  const formatted = new Intl.DateTimeFormat('de-DE', {
+    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  }).format(stamp);
+  return `Offline · Stand ${formatted}`;
+}
+
+function updateDashboardStatus(result) {
+  const offline = result.offline;
+  $('dataStatus').textContent = dashboardStatusText(result);
+  $('dataStatus').classList.toggle('offline', offline);
+  $('healthDot').classList.toggle('offline', offline);
+}
+
+async function fetchLiveDashboard(client = api) {
+  const health = await client('/api/health');
+  const [today, overview] = await Promise.all([client('/api/today'), client('/api/overview')]);
+  const details = await Promise.all(today.plan.map(routine => client(`/api/today?routine=${routine.id}`)));
+  const routines = Object.fromEntries(today.plan.map((routine, index) => [String(routine.id), details[index]]));
+  return {health, today, overview, routines};
 }
 
 function setRows(sets, emptyText) {
@@ -88,8 +211,8 @@ function renderTraining(today) {
   $('daySelector').querySelectorAll('button').forEach(button => button.classList.toggle('active', Number(button.dataset.routine) === routine?.id));
 }
 
-function renderDashboard(health, today, overview) {
-  dashboardData = {health, today, overview};
+function renderDashboard(health, today, overview, routines = {}) {
+  dashboardData = {health, today, overview, routines};
   displayUnits = today.profile.units === 'imperial' ? 'imperial' : 'metric';
   $('health').textContent = health.auth_required ? 'Lokal und geschützt' : 'Lokal und privat';
   $('logout').hidden = !health.auth_required;
@@ -114,13 +237,25 @@ function renderDashboard(health, today, overview) {
   $('progressHistory').innerHTML = history;
   $('allPlans').innerHTML = today.plan.length ? today.plan.map(planCard).join('') : '<article class="panel empty">Noch kein Trainingsplan.</article>';
   $('daySelector').innerHTML = today.plan.map(routine => `<button type="button" data-routine="${routine.id}"><strong>${routine.weekdays.map(day => dayShort[day - 1]).join('/')}</strong><span>${esc(routine.name)}</span></button>`).join('');
-  $('daySelector').querySelectorAll('button').forEach(button => button.addEventListener('click', async () => renderTraining(await api(`/api/today?routine=${button.dataset.routine}`))));
+  $('daySelector').querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
+    renderTraining(dashboardData.routines[String(button.dataset.routine)] || today);
+  }));
   renderTraining(today);
 }
 
 async function loadDashboard() {
-  const [health, today, overview] = await Promise.all([api('/api/health'), api('/api/today'), api('/api/overview')]);
-  renderDashboard(health, today, overview);
+  const result = await resolveDashboardSnapshot(fetchLiveDashboard, dashboardStore);
+  dashboardResult = result;
+  const {health, today, overview, routines} = result.snapshot;
+  renderDashboard(health, today, overview, routines);
+  updateDashboardStatus(result);
+}
+
+function showUnavailable() {
+  $('dataStatus').textContent = 'Offline · keine gespeicherten Daten';
+  $('dataStatus').classList.add('offline');
+  $('healthDot').classList.add('offline');
+  $('nextTraining').innerHTML = '<span class="eyebrow">OFFLINE</span><strong>Keine gespeicherten Daten</strong><p>Verbinde dich einmal mit dem GymPilot-Server, um Auswertungen auf diesem Gerät zu speichern.</p>';
 }
 
 async function init() {
@@ -134,8 +269,25 @@ async function init() {
     if (!response.ok) { $('loginError').textContent = response.status === 429 ? 'Zu viele Versuche. Bitte später erneut probieren.' : 'Ungültiges Passwort.'; return; }
     $('login').close(); $('loginError').textContent = ''; await loadDashboard();
   });
-  $('logout').addEventListener('click', async () => { await fetch('/api/logout', {method:'POST', cache:'no-store', credentials:'same-origin'}); location.reload(); });
-  try { await loadDashboard(); } catch (error) { console.error(error); }
+  $('logout').addEventListener('click', async () => {
+    await clearDashboardSnapshot();
+    await fetch('/api/logout', {method:'POST', cache:'no-store', credentials:'same-origin'});
+    location.reload();
+  });
+  window.addEventListener('offline', () => {
+    if (!dashboardResult) return;
+    dashboardResult = {...dashboardResult, offline: true};
+    updateDashboardStatus(dashboardResult);
+  });
+  $('dataStatus').addEventListener('click', () => loadDashboard().catch(error => console.error(error)));
+  window.addEventListener('online', () => loadDashboard().catch(error => console.error(error)));
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadDashboard().catch(error => console.error(error));
+  });
+  try { await loadDashboard(); } catch (error) {
+    console.error(error);
+    if (error.message !== 'login required') showUnavailable();
+  }
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/service-worker.js');
 }
 

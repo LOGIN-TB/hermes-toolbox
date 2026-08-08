@@ -78,7 +78,9 @@ Vor jedem Schreibvorgang Übung, Gewicht, Einheit und Wiederholungen eindeutig b
 - Backup: `... --json backup`
 - Status: `... --json status`
 
-Nur konkrete Loopback-, LAN- oder VPN-Adressen verwenden; niemals Wildcards, öffentliche Tunnel oder Portweiterleitungen. Exporte und Backups sind privat und dürfen nur nach ausdrücklicher Zielangabe übertragen werden. Laufzeitdaten gehören nie in das Skillverzeichnis. Antworten der Web-API dürfen nicht gecacht werden.
+Die Erfassung erfolgt ausschließlich im Telegram-/Hermes-Dialog. Die Web-App ist read-only und dient nur der Auswertung. Sie darf keine Einheit und keinen Satz starten, ändern, beenden oder zur späteren Synchronisation vormerken. Bei ungeschütztem Dashboard speichert sie nach einem vollständigen erfolgreichen Abruf einen privaten IndexedDB-Snapshot und zeigt ihn ohne Serververbindung mit Zeitstempel an. Bei aktiviertem Dashboard-Passwort wird kein Snapshot gespeichert; Logout löscht ihn. Private API-Antworten dürfen niemals im HTTP- oder Service-Worker-Cache landen.
+
+Nur konkrete Loopback-, LAN- oder VPN-Adressen verwenden; niemals Wildcards, öffentliche Tunnel oder Portweiterleitungen. Exporte und Backups sind privat und dürfen nur nach ausdrücklicher Zielangabe übertragen werden. Laufzeitdaten gehören nie in das Skillverzeichnis.
 
 ## Prüfliste
 

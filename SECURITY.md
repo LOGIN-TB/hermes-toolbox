@@ -19,6 +19,7 @@ Bitte eine private GitHub Security Advisory für dieses Repository erstellen und
 - Gespeichert wird ein gesalzener `scrypt`-Hash. Python-Versionen ohne OpenSSL-scrypt verwenden PBKDF2-HMAC-SHA256 mit 600.000 Iterationen.
 - Sitzungscookies sind zufällig, `HttpOnly` und `SameSite=Strict`. Sie laufen nach 24 Stunden ab; serverseitig wird nur ihr Hash gespeichert.
 - API-Antworten verwenden `Cache-Control: no-store`. Der Service Worker speichert keine Pfade unter `/api/`.
+- Für den ungeschützten read-only Betrieb kopiert die Web-App ausschließlich den letzten vollständig autorisierten Auswertungsstand in einen versionierten IndexedDB-Snapshot desselben Browser-Origins. Dieser kontrollierte Datenspeicher enthält keine Passwörter, Cookies, Tokens oder Authorization-Header, ist auf 2 MB begrenzt und wird atomar ersetzt. Bei aktiviertem Dashboard-Passwort wird kein Snapshot gespeichert; Logout löscht einen vorhandenen Snapshot.
 - Der HTTP-Host-Header muss zur konfigurierten Bind-Adresse passen. Das erschwert DNS-Rebinding-Angriffe.
 - JSON-Anfragen sind auf 8 KiB begrenzt. `Content-Length` muss ausschließlich aus ASCII-Ziffern bestehen und genau einmal vorkommen; jede Form von `Transfer-Encoding` wird abgelehnt. Für die gesamte Anfrage gilt eine absolute Frist von 15 Sekunden, gleichzeitig werden höchstens 32 Anfragen bearbeitet.
 - JSON wird strikt gelesen: Nichtstandardwerte wie `NaN` oder `Infinity` und doppelte Objektschlüssel werden abgelehnt.
@@ -34,4 +35,5 @@ Bitte eine private GitHub Security Advisory für dieses Repository erstellen und
 - Profile werden durch getrennte Dateipfade voneinander isoliert, nicht durch Betriebssystemkonten oder Container.
 - Leere Werte für `HERMES_HOME` oder `GYMPILOT_DATA_DIR` gelten als nicht gesetzt; GymPilot verwendet dann das normale Profilverzeichnis.
 - Wer Zugriff auf das lokale Benutzerkonto oder die Datenbankdatei hat, kann Trainingsmetadaten lesen und versuchen, den Passwort-Hash offline anzugreifen.
+- Wer Zugriff auf das entsperrte Smartphone-Browserprofil hat, kann den dort gespeicherten unverschlüsselten Offline-Auswertungsstand lesen. Für sensible Installationen Dashboard-Passwort aktivieren; dann ist der Offline-Snapshot bewusst deaktiviert.
 - Prozesse derselben Betriebssystem-Benutzerkennung gelten als Teil derselben Vertrauensgrenze. GymPilot schützt stabile unbekannte neuere SQLite-Schemas vor Änderungen und erkennt einen Dateiaustausch während der read-only Inspektion. Es verspricht jedoch keinen Schutz gegen einen absichtlich parallel laufenden Prozess derselben Benutzerkennung, der Datenbank-, Sidecar- oder übergeordnete Verzeichnispfade während des SQLite-Öffnens austauscht. Dafür wären Betriebssystemkontentrennung, ein Container oder eine native SQLite-VFS nötig.
