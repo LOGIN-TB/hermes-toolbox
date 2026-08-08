@@ -1,1 +1,37 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#111217"/><path d="M104 206v100m-40-64v28m384-28v28m-40-64v100M104 256h304" stroke="#8d89ff" stroke-width="36" stroke-linecap="round"/><circle cx="256" cy="256" r="48" fill="#f5f7fa"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">GymPilot</title>
+  <desc id="desc">Drei ansteigende Fortschrittsbalken hinter einer Hantel</desc>
+  <defs>
+    <radialGradient id="background-glow" cx="50%" cy="18%" r="78%">
+      <stop offset="0" stop-color="#27234f"/>
+      <stop offset="0.48" stop-color="#11121d"/>
+      <stop offset="1" stop-color="#08090d"/>
+    </radialGradient>
+    <linearGradient id="bar-gradient" x1="0" y1="1" x2="0.85" y2="0">
+      <stop offset="0" stop-color="#665bd4"/>
+      <stop offset="1" stop-color="#a89dff"/>
+    </linearGradient>
+    <linearGradient id="steel-gradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.5" stop-color="#e8e7ff"/>
+      <stop offset="1" stop-color="#b8b3ff"/>
+    </linearGradient>
+    <filter id="soft-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect id="icon-background" x="12" y="12" width="488" height="488" rx="112" fill="url(#background-glow)" stroke="#262837" stroke-width="4"/>
+  <g filter="url(#soft-glow)" opacity="0.96">
+    <rect class="progress-bar" x="130" y="224" width="54" height="116" rx="24" fill="url(#bar-gradient)" opacity="0.72"/>
+    <rect class="progress-bar" x="229" y="164" width="54" height="176" rx="24" fill="url(#bar-gradient)" opacity="0.84"/>
+    <rect class="progress-bar" x="328" y="104" width="54" height="236" rx="24" fill="url(#bar-gradient)"/>
+  </g>
+  <rect id="dumbbell-bar" x="90" y="316" width="332" height="30" rx="15" fill="url(#steel-gradient)"/>
+  <g id="dumbbell-plates" fill="url(#bar-gradient)" filter="url(#soft-glow)">
+    <rect x="64" y="282" width="48" height="98" rx="18"/>
+    <rect x="104" y="299" width="28" height="64" rx="12"/>
+    <rect x="400" y="282" width="48" height="98" rx="18"/>
+    <rect x="380" y="299" width="28" height="64" rx="12"/>
+  </g>
+</svg>
