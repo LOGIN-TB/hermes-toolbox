@@ -1,7 +1,7 @@
 ---
 name: gym
 description: Use when setting up, planning, logging, reviewing, securing, exporting, or backing up private workouts with the local GymPilot app.
-version: 0.1.0-alpha.1
+version: 0.1.0-alpha.2
 author: LOGIN-TB contributors
 license: MIT
 platforms: [linux, macos]
