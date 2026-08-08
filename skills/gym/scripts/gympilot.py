@@ -179,10 +179,10 @@ CREATE TABLE IF NOT EXISTS plan_drafts(id INTEGER PRIMARY KEY CHECK(id=1), mode 
 
 def storage_identity():
     identity=[]
-    for path in (data_dir(),db_path(),Path(f"{db_path()}-wal"),Path(f"{db_path()}-shm")):
+    for path in (data_dir(),db_path()):
         try:
             current=os.lstat(path)
-            identity.append((str(path),current.st_dev,current.st_ino,current.st_mode,current.st_size,current.st_mtime_ns))
+            identity.append((str(path),current.st_dev,current.st_ino,stat.S_IFMT(current.st_mode)))
         except FileNotFoundError:
             identity.append((str(path),None))
     return tuple(identity)
