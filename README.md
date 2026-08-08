@@ -122,7 +122,7 @@ python3 skills/gym/scripts/gympilot.py --json draft generate --goal muscle_gain 
 
 ### Gesamtvorschau, Änderung und Bestätigung
 
-`draft show` liefert den persistenten Entwurf nach jeder Unterbrechung zusammen mit einer monotonen `revision` und einem SHA-256-`content_hash` über das kanonische Plan-JSON. Mit `draft routine-update ... --revision REVISION` und `draft exercise-update ... --revision REVISION` lassen sich bestätigte Änderungswünsche strukturiert anwenden. Jede Änderung erhöht die Revision und erzeugt einen neuen Hash; danach muss der Gesamtplan erneut gezeigt werden.
+`draft show` liefert den persistenten Entwurf nach jeder Unterbrechung zusammen mit einer monotonen `revision` und einem SHA-256-`content_hash` über das kanonische Plan-JSON. Mit `draft routine-update ... --revision REVISION` und `draft exercise-update ... --revision REVISION` lassen sich bestätigte Änderungswünsche strukturiert anwenden. Jede Änderung erhöht die Revision und erzeugt einen neuen Hash; danach muss der Gesamtplan erneut gezeigt werden. Generator-Metadaten sind ausschließlich unveränderten lokalen Generatorentwürfen vorbehalten: Imports dürfen nur `routines` enthalten, und eine strukturierte Änderung entfernt die Generator-Provenienz. Unveränderte Generatorentwürfe werden bei der Bestätigung deterministisch neu geprüft.
 
 Erst nachdem der vollständige aktuelle Plan als Ganzes bestätigt wurde, materialisiert `draft confirm --revision REVISION --content-hash HASH` exakt diesen Entwurf in einer atomaren Transaktion. Veraltete Vorschauen, parallele Bestätigungen und manipulierte Entwürfe werden abgewiesen. Eine laufende Session blockiert den Austausch und löst einen vollständigen Rollback aus. Historische Sessions, Sätze und Gerätealiases werden nicht geändert. `draft discard --revision REVISION` verwirft nur den Entwurf.
 
@@ -192,6 +192,8 @@ GymPilot enthält keine Analysefunktionen, Cloud-Synchronisierung, Telemetrie od
 Der Server bindet standardmäßig nur an Loopback. Wildcard- und öffentlich routbare Adressen werden abgelehnt; für LAN oder VPN muss eine konkrete private Adresse angegeben werden. Der Host-Header muss zur konfigurierten Adresse passen. JSON-Anfragen sind größenbegrenzt. Diese Schutzmaßnahmen ersetzen keine Firewall. Portweiterleitungen und öffentliche Tunnel werden nicht unterstützt. Im LAN läuft HTTP unverschlüsselt; außerhalb des Geräts sollte ein vertrauenswürdiges VPN verwendet werden.
 
 Die Authentifizierung speichert nur Salt und Passwort-Hash: `scrypt`, soweit die Python-Installation es unterstützt, sonst PBKDF2-HMAC-SHA256 mit 600.000 Iterationen. Sitzungstokens werden zufällig erzeugt und nur gehasht in SQLite gespeichert. Cookies sind `HttpOnly` und `SameSite=Strict`. Weitere Angaben stehen in [SECURITY.md](SECURITY.md).
+
+Prozesse derselben Betriebssystem-Benutzerkennung liegen innerhalb derselben lokalen Vertrauensgrenze. Die genaue Abgrenzung für parallele Änderungen an SQLite-Dateipfaden ist in [SECURITY.md](SECURITY.md) dokumentiert.
 
 GymPilot ist keine medizinische Software. Einschränkungen dienen nur der Trainingsplanung; im Chat werden weder medizinische Diagnosen gestellt noch Passwörter erfragt.
 

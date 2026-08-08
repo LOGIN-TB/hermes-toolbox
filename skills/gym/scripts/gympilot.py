@@ -20,6 +20,7 @@ import socket
 import sqlite3
 import stat
 import sys
+import tempfile
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -176,28 +177,149 @@ CREATE TABLE IF NOT EXISTS plan_drafts(id INTEGER PRIMARY KEY CHECK(id=1), mode 
 """}
 
 
-def connect() -> sqlite3.Connection:
-    private_directory(data_dir())
-    if os.path.lexists(db_path()) and db_path().is_symlink(): raise ValueError("the GymPilot database must not be a symlink")
-    if not os.path.lexists(db_path()):
+def storage_identity():
+    identity=[]
+    for path in (data_dir(),db_path(),Path(f"{db_path()}-wal"),Path(f"{db_path()}-shm")):
         try:
-            descriptor=prepare_private_file(db_path()); os.close(descriptor)
-        except FileExistsError: pass
-    if db_path().is_symlink(): raise ValueError("the GymPilot database must not be a symlink")
-    if os.name != "nt": os.chmod(db_path(),0o600)
-    con = sqlite3.connect(db_path(), timeout=10)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")
-    con.execute("PRAGMA journal_mode=WAL")
-    if os.name != "nt":
-        for suffix in ("","-wal","-shm"):
-            try: os.chmod(f"{db_path()}{suffix}",0o600)
-            except FileNotFoundError: pass
-    return con
+            current=os.lstat(path)
+            identity.append((str(path),current.st_dev,current.st_ino,current.st_mode,current.st_size,current.st_mtime_ns))
+        except FileNotFoundError:
+            identity.append((str(path),None))
+    return tuple(identity)
+
+
+def open_database_identity_guard():
+    if not os.path.lexists(db_path()): return None
+    parent=directory_descriptor(data_dir())
+    descriptor=None
+    try:
+        descriptor=os.open(db_path().name,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0),dir_fd=parent)
+        current=os.fstat(descriptor)
+        if not stat.S_ISREG(current.st_mode): raise ValueError("the GymPilot database must be a regular file")
+        return parent,descriptor,(current.st_dev,current.st_ino)
+    except Exception:
+        if descriptor is not None: os.close(descriptor)
+        os.close(parent)
+        raise
+
+
+def verify_database_identity_guard(guard) -> None:
+    if guard is None: return
+    parent,descriptor,expected=guard
+    opened=os.fstat(descriptor)
+    try:
+        current=os.stat(db_path().name,dir_fd=parent,follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise ValueError("the GymPilot database was replaced during schema inspection") from exc
+    if (opened.st_dev,opened.st_ino)!=expected or (current.st_dev,current.st_ino)!=expected:
+        raise ValueError("the GymPilot database was replaced during schema inspection")
+
+
+def close_database_identity_guard(guard) -> None:
+    if guard is None: return
+    parent,descriptor,_=guard
+    os.close(descriptor); os.close(parent)
+
+
+def connect() -> sqlite3.Connection:
+    guard=open_database_identity_guard()
+    con=None
+    try:
+        identity_before=storage_identity()
+        inspected=existing_schema_version_read_only()
+        identity_after=storage_identity()
+        if identity_before!=identity_after:
+            raise ValueError("the GymPilot database changed during schema inspection")
+        if inspected > SCHEMA_VERSION:
+            raise ValueError(f"database schema version {inspected} is newer than supported version {SCHEMA_VERSION}")
+        existing=guard is not None
+        verify_database_identity_guard(guard)
+        if not existing:
+            private_directory(data_dir())
+            try:
+                descriptor=prepare_private_file(db_path()); os.close(descriptor)
+            except FileExistsError as exc:
+                raise ValueError("the GymPilot database appeared during initialization; retry") from exc
+        if db_path().is_symlink(): raise ValueError("the GymPilot database must not be a symlink")
+        con=sqlite3.connect(db_path(),timeout=10)
+        con.row_factory=sqlite3.Row
+        verify_database_identity_guard(guard)
+        opened=con.execute("PRAGMA user_version").fetchone()[0]
+        if opened > SCHEMA_VERSION:
+            raise ValueError(f"database schema version {opened} is newer than supported version {SCHEMA_VERSION}")
+        if existing and opened!=inspected:
+            raise ValueError("the GymPilot database version changed before SQLite opened it")
+        private_directory(data_dir())
+        if os.name != "nt": os.chmod(db_path(),0o600)
+        con.execute("PRAGMA foreign_keys=ON")
+        con.execute("PRAGMA journal_mode=WAL")
+        if os.name != "nt":
+            for suffix in ("","-wal","-shm"):
+                try: os.chmod(f"{db_path()}{suffix}",0o600)
+                except FileNotFoundError: pass
+        return con
+    except Exception:
+        if con is not None: con.close()
+        raise
+    finally:
+        close_database_identity_guard(guard)
+
+
+def read_stable_regular_bytes(path: Path, limit: int | None = None) -> bytes:
+    parent=directory_descriptor(path.parent)
+    descriptor=None
+    try:
+        flags=os.O_RDONLY | getattr(os,"O_NOFOLLOW",0)
+        descriptor=os.open(path.name,flags,dir_fd=parent)
+        before=os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode): raise ValueError(f"{path.name} must be a regular file")
+        if limit is not None:
+            data=os.read(descriptor,limit)
+        else:
+            chunks=[]
+            while True:
+                chunk=os.read(descriptor,1024*1024)
+                if not chunk: break
+                chunks.append(chunk)
+            data=b"".join(chunks)
+        after=os.fstat(descriptor)
+        if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns):
+            raise ValueError(f"{path.name} changed during schema inspection")
+        if limit is None and len(data)!=before.st_size:
+            raise ValueError(f"{path.name} changed during schema inspection")
+        return data
+    finally:
+        if descriptor is not None: os.close(descriptor)
+        os.close(parent)
+
+
+def existing_schema_version_read_only() -> int:
+    path=db_path()
+    if not os.path.lexists(path): return 0
+    if path.is_symlink(): raise ValueError("the GymPilot database must not be a symlink")
+    wal=Path(f"{path}-wal")
+    if not os.path.lexists(wal):
+        header=read_stable_regular_bytes(path,64)
+        if not header: return 0
+        if os.path.lexists(wal): raise ValueError("the GymPilot database changed during schema inspection")
+        if len(header)<64 or header[:16]!=b"SQLite format 3\x00":
+            raise ValueError("the GymPilot database is not a valid SQLite database")
+        return int.from_bytes(header[60:64],"big")
+    if wal.is_symlink(): raise ValueError("the GymPilot WAL must not be a symlink")
+    database_bytes=read_stable_regular_bytes(path); wal_bytes=read_stable_regular_bytes(wal)
+    with tempfile.TemporaryDirectory(prefix="gympilot-schema-") as temporary:
+        clone=Path(temporary)/"gympilot.db"
+        clone.write_bytes(database_bytes); clone.chmod(0o600)
+        clone_wal=Path(f"{clone}-wal")
+        clone_wal.write_bytes(wal_bytes); clone_wal.chmod(0o600)
+        con=sqlite3.connect(clone)
+        try:
+            return con.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            con.close()
 
 
 def initialize() -> dict:
-    private_directory(data_dir())
     with connect() as con:
         current = con.execute("PRAGMA user_version").fetchone()[0]
         if current > SCHEMA_VERSION:
@@ -572,6 +694,24 @@ def canonical_plan_json(document: dict) -> str:
     return json.dumps(document,ensure_ascii=False,allow_nan=False,sort_keys=True,separators=(",",":"))
 
 
+def validate_generation_provenance(document: dict) -> None:
+    generation=document.get("generation")
+    if generation is None: return
+    try:
+        expected=generate_curated_plan(
+            goal=generation["goal"],days=generation["days"],
+            duration_minutes=generation["duration_minutes"],experience=generation["experience"],
+            equipment=generation["equipment"],focus=generation["preferred_body_areas"],
+            avoid=generation["avoided_exercises"],restrictions=generation["restrictions"],
+        )
+    except (KeyError,TypeError,ValueError) as exc:
+        raise ValueError("generator provenance is invalid") from exc
+    expected_json=json.dumps(expected,ensure_ascii=False,allow_nan=False,sort_keys=True,separators=(",",":"))
+    actual_json=json.dumps(document,ensure_ascii=False,allow_nan=False,sort_keys=True,separators=(",",":"))
+    if not hmac.compare_digest(expected_json.encode("utf-8"),actual_json.encode("utf-8")):
+        raise ValueError("generator provenance does not match the plan")
+
+
 def draft_result(row: sqlite3.Row) -> dict:
     return {"mode":row["mode"],"status":row["status"],"plan":json.loads(row["payload_json"]),
             "revision":row["revision"],"content_hash":row["content_hash"],
@@ -864,7 +1004,10 @@ def command(args):
         if args.action=="capabilities": return generator_capabilities()
         with connect() as con:
             if args.action=="import":
-                document=validate_plan_document(strict_json_loads(args.plan_json.encode("utf-8")))
+                imported=strict_json_loads(args.plan_json.encode("utf-8"))
+                if type(imported) is dict and "generation" in imported:
+                    raise ValueError("generation metadata is reserved for the local generator")
+                document=validate_plan_document(imported)
                 payload=canonical_plan_json(document); content_hash=hashlib.sha256(payload.encode()).hexdigest(); stamp=now()
                 con.execute("BEGIN IMMEDIATE")
                 current=con.execute("SELECT revision FROM plan_drafts WHERE id=1").fetchone()
@@ -899,6 +1042,7 @@ def command(args):
                 if row["revision"]!=args.revision: raise ValueError("draft revision mismatch")
                 if row["status"]!="draft": raise ValueError("confirmed plan drafts cannot be changed")
                 document=json.loads(row["payload_json"])
+                before_routines=json.dumps(document["routines"],ensure_ascii=False,allow_nan=False,sort_keys=True,separators=(",",":"))
                 try: routine=document["routines"][args.routine_index-1]
                 except IndexError as exc: raise ValueError("draft routine index not found") from exc
                 if args.action=="routine-update":
@@ -910,6 +1054,9 @@ def command(args):
                     for field in ("name","sets","min_reps","max_reps"):
                         value=getattr(args,field)
                         if value is not None: exercise[field]=value
+                after_routines=json.dumps(document["routines"],ensure_ascii=False,allow_nan=False,sort_keys=True,separators=(",",":"))
+                if hmac.compare_digest(before_routines.encode("utf-8"),after_routines.encode("utf-8")): raise ValueError("draft change must alter the plan")
+                document.pop("generation",None)
                 document=validate_plan_document(document); payload=canonical_plan_json(document); stamp=now()
                 if payload==row["payload_json"]: raise ValueError("draft change must alter the plan")
                 con.execute("UPDATE plan_drafts SET payload_json=?,revision=revision+1,content_hash=?,updated_at=? WHERE id=1",
@@ -925,6 +1072,7 @@ def command(args):
                 canonical=canonical_plan_json(document)
                 if not hmac.compare_digest(hashlib.sha256(canonical.encode()).hexdigest(),row["content_hash"]):
                     raise ValueError("stored draft content hash mismatch")
+                validate_generation_provenance(document)
                 materialize_draft(con,document)
                 stamp=now(); con.execute("UPDATE plan_drafts SET status='confirmed',confirmed_at=?,updated_at=? WHERE id=1",(stamp,stamp))
                 con.commit()

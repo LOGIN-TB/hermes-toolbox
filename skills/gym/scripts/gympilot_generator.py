@@ -225,7 +225,7 @@ def generate_plan(*, goal, days, duration_minutes, experience, equipment,
     estimated_max = 0.0
     for day, (name, required, optional) in zip(normalized_days, _templates(len(normalized_days))):
         if "no_overhead" in restrictions:
-            required = tuple("horizontal_push" if pattern == "vertical_push" else pattern for pattern in required)
+            required = tuple("core_brace" if pattern == "vertical_push" else pattern for pattern in required)
             optional = tuple(pattern for pattern in optional if pattern != "vertical_push")
         chosen = []
         used_ids = set()

@@ -160,6 +160,19 @@ class GymPilotGeneratorTest(unittest.TestCase):
             }
             self.assertTrue(selected)
             self.assertFalse(selected & overhead_names, days)
+        for days in (5, 6):
+            bodyweight = generator.generate_plan(
+                goal="general_fitness",
+                days=list(range(1, days + 1)),
+                duration_minutes=90,
+                experience="intermediate",
+                equipment=[],
+                focus=[],
+                avoid=[],
+                restrictions=["no_overhead"],
+            )
+            self.assertEqual(len(bodyweight["routines"]), days)
+            self.assertTrue(all(routine["exercises"] for routine in bodyweight["routines"]))
         with self.assertRaises(ValueError):
             generator.generate_plan(goal="general_fitness", days=list(range(1, 8)),
                                     duration_minutes=90, experience="beginner",
