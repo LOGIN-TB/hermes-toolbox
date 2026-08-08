@@ -6,6 +6,7 @@ import importlib.util
 import csv
 import json
 import os
+from datetime import date
 from pathlib import Path
 import socket
 import sqlite3
@@ -71,6 +72,25 @@ class GymPilotTest(unittest.TestCase):
     def confirm_draft(self, draft):
         return self.cli("draft", "confirm", "--revision", draft["revision"],
                         "--content-hash", draft["content_hash"])[1]
+
+    def historical_generated_draft(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        gym.initialize()
+        document = gym.generate_curated_plan(
+            goal="general_fitness", days=[1], duration_minutes=60,
+            experience="beginner", equipment=[], focus=[], avoid=[], restrictions=[],
+        )
+        payload = gym.canonical_plan_json(document)
+        content_hash = __import__("hashlib").sha256(payload.encode()).hexdigest()
+        stamp = gym.now()
+        with gym.connect() as con:
+            con.execute("""INSERT INTO plan_drafts
+                (id,mode,payload_json,revision,content_hash,status,created_at,updated_at,confirmed_at)
+                VALUES(1,'generate',?,1,?,'draft',?,?,NULL)""",
+                (payload, content_hash, stamp, stamp))
+            con.commit()
+        return self.cli("draft", "show")[1]
 
     def test_draft_has_monotone_revision_and_hash_of_canonical_plan_json(self):
         source = self.sample_plan()
@@ -718,6 +738,11 @@ class GymPilotTest(unittest.TestCase):
         declared = {Path(icon["src"]).name: icon["sizes"] for icon in manifest["icons"]}
         expected = {"icon-192.png": 192, "icon-512.png": 512}
         self.assertEqual(set(expected), set(declared))
+        svg = (WEB / "icons" / "icon.svg").read_text()
+        self.assertIn('id="icon-background"', svg)
+        self.assertEqual(svg.count('class="progress-bar"'), 3)
+        self.assertIn('id="dumbbell-bar"', svg)
+        self.assertIn('id="dumbbell-plates"', svg)
         for name, size in {**expected, "apple-touch-icon.png": 180, "favicon-32.png": 32}.items():
             data = (WEB / "icons" / name).read_bytes()
             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
@@ -1014,6 +1039,56 @@ class GymPilotTest(unittest.TestCase):
             server.server_close()
             thread.join(5)
 
+    def test_today_api_selects_a_routine_from_the_training_navigation(self):
+        first = self.routine("Oberkörper", 1)
+        self.exercise(first["id"], "Brustpresse")
+        second = self.routine("Beine", 5)
+        self.exercise(second["id"], "Beinpresse")
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        server = gym.make_server("127.0.0.1", 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            connection.request("GET", f"/api/today?routine={second['id']}")
+            response = connection.getresponse()
+            payload = json.loads(response.read())
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["routine"]["id"], second["id"])
+            self.assertEqual(payload["routine"]["name"], "Beine")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(5)
+
+    def test_overview_data_contains_cockpit_metrics_timeline_history_and_next_training(self):
+        monday = self.routine("Oberkörper", 1)
+        press = self.exercise(monday["id"], "Brustpresse", sets=3)
+        friday = self.routine("Beine", 5)
+        leg_press = self.exercise(friday["id"], "Beinpresse", sets=3)
+        older = self.cli("session", "start", "--routine", monday["id"], "--date", "2026-07-27")[1]
+        self.cli("set", "log", older["id"], press["id"], "--weight", 40, "--reps", 8)
+        self.cli("session", "finish", older["id"])
+        latest = self.cli("session", "start", "--routine", friday["id"], "--date", "2026-08-07")[1]
+        self.cli("set", "log", latest["id"], leg_press["id"], "--weight", 50, "--reps", 10)
+        self.cli("session", "finish", latest["id"])
+
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        overview = gym.overview_data(reference_date=date(2026, 8, 8))
+
+        self.assertEqual(overview["totals"], {"sessions": 2, "sets": 2, "reps": 18, "volume": 820.0})
+        self.assertEqual(overview["this_week"], {"sessions": 1, "sets": 1, "reps": 10, "volume": 500.0})
+        self.assertEqual(overview["next_routine"]["name"], "Oberkörper")
+        self.assertEqual(overview["next_routine"]["weekday"], 1)
+        self.assertEqual(overview["next_routine"]["exercise_count"], 1)
+        self.assertEqual(overview["next_routine"]["planned_sets"], 3)
+        self.assertEqual(len(overview["weekly_volume"]), 12)
+        self.assertEqual(overview["weekly_volume"][-1]["volume"], 500.0)
+        self.assertEqual([item["routine_name"] for item in overview["recent_sessions"]], ["Beine", "Oberkörper"])
+        self.assertEqual(overview["recent_sessions"][0]["volume"], 500.0)
+
     def test_confirming_a_new_draft_can_reuse_existing_routine_names(self):
         plan = {"routines": [{"name": "Ganzkörper", "weekdays": [1], "exercises": [
             {"name": "Kniebeuge", "sets": 3, "min_reps": 5, "max_reps": 8}
@@ -1029,12 +1104,24 @@ class GymPilotTest(unittest.TestCase):
         self.assertEqual(current[0]["weekdays"], [2])
         self.assertEqual(current[0]["exercises"][0]["planned_sets"], 4)
 
-    def test_onboarding_exposes_and_persists_three_setup_modes(self):
+    def test_onboarding_exposes_only_import_and_manual_setup(self):
         status = self.cli("onboarding", "status")[1]
-        self.assertEqual(status["setup_modes"], ["import", "generate", "manual"])
-        selected = self.cli("onboarding", "mode", "generate")[1]
-        self.assertEqual(selected["selected_mode"], "generate")
-        self.assertEqual(self.cli("onboarding", "status")[1]["selected_mode"], "generate")
+        self.assertEqual(status["setup_modes"], ["import", "manual"])
+        selected = self.cli("onboarding", "mode", "import")[1]
+        self.assertEqual(selected["selected_mode"], "import")
+        self.assertEqual(self.cli("onboarding", "status")[1]["selected_mode"], "import")
+        rejected_mode, payload = self.cli("onboarding", "mode", "generate", check=False)
+        self.assertEqual(rejected_mode.returncode, 2)
+        self.assertIn("invalid choice", payload["error"])
+        rejected_draft, payload = self.cli("draft", "generate", check=False)
+        self.assertEqual(rejected_draft.returncode, 2)
+        self.assertIn("invalid choice", payload["error"])
+        capabilities = self.cli("draft", "capabilities")[1]
+        self.assertIsNotNone(capabilities)
+        assert capabilities is not None
+        self.assertEqual(set(capabilities), {"equipment", "exercises"})
+        self.assertNotIn("goals", capabilities)
+        self.assertNotIn("generator_version", capabilities)
 
     def test_structured_draft_updates_preserve_history_on_atomic_replacement(self):
         old = self.routine("Alt", 1)
@@ -1055,55 +1142,8 @@ class GymPilotTest(unittest.TestCase):
             self.assertEqual(con.execute("SELECT routine_id,session_date FROM sessions WHERE id=?", (session["id"],)).fetchone(), (old["id"], "2026-01-01"))
             self.assertEqual(con.execute("SELECT session_id,weight_kg,reps FROM workout_sets WHERE id=?", (logged["id"],)).fetchone(), (session["id"], 40.0, 8))
 
-    def test_generator_is_deterministic_local_and_uses_all_preferences(self):
-        self.cli("studio-profile", "update", "--equipment", "barbell", "--equipment", "bench", "--equipment", "dumbbell")
-        args = ("draft", "generate", "--goal", "muscle_gain", "--day", 1, "--day", 4,
-                "--duration", 45, "--experience", "intermediate", "--focus", "chest",
-                "--avoid", "Push-up", "--restriction", "no_overhead")
-        first = self.cli(*args)[1]
-        second = self.cli(*args, "--replace-revision", first["revision"])[1]
-        self.assertEqual(first["plan"], second["plan"])
-        metadata = first["plan"]["generation"]
-        self.assertEqual(metadata["goal"], "muscle_gain")
-        self.assertEqual(metadata["days"], [1, 4])
-        self.assertEqual(metadata["duration_minutes"], 45)
-        self.assertEqual(metadata["experience"], "intermediate")
-        self.assertEqual(metadata["preferred_body_areas"], ["chest"])
-        self.assertEqual(metadata["avoided_exercises"], ["push_up"])
-        self.assertEqual(metadata["restrictions"], ["no_overhead"])
-        self.assertEqual(metadata["equipment"], ["barbell", "bench", "dumbbell"])
-        names = [exercise["name"] for routine in first["plan"]["routines"] for exercise in routine["exercises"]]
-        self.assertIn("Langhantel-Bankdrücken", names)
-        self.assertNotIn("Push-up", names)
-        self.assertEqual(len(first["plan"]["routines"]), 2)
-
-    def test_generator_supports_all_goals_and_rejects_duplicate_days(self):
-        revision = None
-        for goal in ("muscle_gain", "strength", "general_fitness", "weight_loss"):
-            args = ["draft", "generate", "--goal", goal, "--day", 2, "--duration", 30,
-                    "--experience", "beginner"]
-            if revision is not None: args += ["--replace-revision", revision]
-            result = self.cli(*args)[1]
-            revision = result["revision"]
-            self.assertEqual(result["plan"]["generation"]["goal"], goal)
-        rejected, payload = self.cli("draft", "generate", "--goal", "strength", "--day", 2, "--day", 2,
-                                     "--duration", 30, "--experience", "beginner", check=False)
-        self.assertEqual(rejected.returncode, 2)
-        self.assertIsNotNone(payload)
-        assert payload is not None
-        self.assertIn("unique", payload["error"])
-        rejected, payload = self.cli("draft", "generate", "--goal", "strength", "--day", 2,
-                                     "--duration", 30, "--experience", "beginner", "--restriction", "unknown", check=False)
-        self.assertEqual(rejected.returncode, 2)
-        self.assertIsNotNone(payload)
-        assert payload is not None
-        self.assertIn("invalid choice", payload["error"])
-
     def test_generator_metadata_is_reserved_and_removed_after_structured_edit(self):
-        draft = self.cli(
-            "draft", "generate", "--goal", "general_fitness", "--day", 1,
-            "--duration", 60, "--experience", "beginner",
-        )[1]
+        draft = self.historical_generated_draft()
         self.assertIsNotNone(draft)
         assert draft is not None
         rejected, payload = self.cli(
@@ -1124,10 +1164,7 @@ class GymPilotTest(unittest.TestCase):
         self.assertNotIn("generation", changed["plan"])
 
     def test_confirm_rejects_semantically_forged_generator_metadata(self):
-        draft = self.cli(
-            "draft", "generate", "--goal", "general_fitness", "--day", 1,
-            "--duration", 60, "--experience", "beginner",
-        )[1]
+        draft = self.historical_generated_draft()
         self.assertIsNotNone(draft)
         assert draft is not None
         forged = json.loads(json.dumps(draft["plan"]))
@@ -1152,30 +1189,6 @@ class GymPilotTest(unittest.TestCase):
         self.assertEqual(shown["status"], "draft")
         self.assertEqual(self.cli("plan")[1], [])
 
-    def test_cli_generator_uses_curated_splits_and_controlled_studio_vocabulary(self):
-        equipment = ("barbell", "bench", "cable", "dumbbell", "machines", "rack")
-        self.cli("studio-profile", "update", *(part for item in equipment for part in ("--equipment", item)))
-        _, draft = self.cli(
-            "draft", "generate", "--goal", "strength",
-            "--day", 1, "--day", 2, "--day", 4, "--day", 5,
-            "--duration", 90, "--experience", "advanced", "--focus", "chest",
-        )
-        self.assertIsNotNone(draft)
-        assert draft is not None
-        self.assertEqual(
-            [routine["name"] for routine in draft["plan"]["routines"]],
-            ["Oberkörper A", "Unterkörper A", "Oberkörper B", "Unterkörper B"],
-        )
-        metadata = draft["plan"]["generation"]
-        self.assertEqual(metadata["generator_version"], "curated-local-v2")
-        self.assertLessEqual(metadata["estimated_duration_minutes"], 90)
-        rejected, payload = self.cli(
-            "studio-profile", "update", "--equipment", "dumbells", check=False
-        )
-        self.assertEqual(rejected.returncode, 2)
-        self.assertIsNotNone(payload)
-        assert payload is not None
-        self.assertIn("unsupported equipment", payload["error"])
 
     def test_imported_draft_resumes_previews_and_materializes_only_on_confirm(self):
         plan = {"routines": [{"name": "Ganzkörper", "weekdays": [1, 4], "exercises": [

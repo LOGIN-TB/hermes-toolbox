@@ -10,9 +10,9 @@ GymPilot ist ein lokaler Trainingstracker mit mobiler Weboberfläche und PWA-Dat
 - laufende Einheiten, Satzkorrekturen und Vergleich mit der letzten Einheit derselben Routine
 - Gewichteingabe in kg oder lb; Speicherung einheitlich in kg
 - Gerätealiases für bestätigte Gerätefotos und gerätebezogene Satzhistorie
-- drei Setup-Wege: Gesamtplan importieren, lokal automatisch erzeugen oder weiterhin manuell eingeben
+- zwei Setup-Wege: Gesamtplan importieren oder manuell eingeben
 - persistenter Gesamtentwurf mit vollständiger Vorschau und genau einer atomaren Gesamtbestätigung
-- dauerhaft editierbares Geräte-/Studioprofil und deterministische Übungsauswahl aus einer kuratierten lokalen Bibliothek
+- dauerhaft editierbares Geräte-/Studioprofil
 - JSON-Ausgabe für Hermes und lesbare Terminalausgabe
 - mobile Oberfläche; als PWA installierbar, wenn der Browser einen sicheren Kontext bereitstellt
 - Standardbindung an `127.0.0.1`; bewusste Freigabe für eine konkrete LAN- oder VPN-Adresse
@@ -88,7 +88,6 @@ python3 skills/gym/scripts/gympilot.py --json today
 python3 skills/gym/scripts/gympilot.py --json plan
 python3 skills/gym/scripts/gympilot.py --json draft capabilities
 python3 skills/gym/scripts/gympilot.py --json studio-profile update --equipment barbell --equipment bench
-python3 skills/gym/scripts/gympilot.py --json draft generate --goal strength --day 1 --day 4 --duration 45 --experience intermediate
 python3 skills/gym/scripts/gympilot.py --json draft show
 python3 skills/gym/scripts/gympilot.py --json draft confirm --revision REVISION --content-hash HASH
 python3 skills/gym/scripts/gympilot.py --json session start --routine 1
@@ -101,7 +100,7 @@ python3 skills/gym/scripts/gympilot.py --json backup
 
 ## Unterbrechbares `/gym setup` als Gesamtplan
 
-`onboarding status` nennt die drei Modi `import`, `generate` und `manual`. Die Auswahl wird mit `onboarding mode MODUS` gespeichert. Ein vorhandener Entwurf bleibt über Prozess- und Chatunterbrechungen hinweg erhalten. `draft show` ist rein lesend und materialisiert niemals einen Plan.
+`onboarding status` nennt die zwei Modi `import` und `manual`. Die Auswahl wird mit `onboarding mode MODUS` gespeichert. Ein vorhandener Entwurf bleibt über Prozess- und Chatunterbrechungen hinweg erhalten. `draft show` ist rein lesend und materialisiert niemals einen Plan. GymPilot lässt Hermes aus einer Zielvorgabe keinen Trainingsplan vorschlagen.
 
 ### Vollständigen Plan importieren
 
@@ -109,20 +108,9 @@ Ein in Telegram eingefügter Gesamtplan wird von Hermes als Ganzes gelesen und i
 
 Existiert bereits ein Entwurf, wird er nicht still überschrieben. Ein bewusster vollständiger Ersatz benötigt `--replace-revision REVISION` mit der Revision der letzten Vorschau.
 
-### Gesamtplan automatisch erzeugen
-
-`draft generate` berücksichtigt eines der vier Ziele `muscle_gain`, `strength`, `general_fitness` und `weight_loss`, ein bis sechs Trainingstage, Dauer, Erfahrung, bevorzugte Körperbereiche, vermiedene Übungen und kontrollierte Einschränkungen. Das dauerhafte Geräteprofil wird mit `studio-profile show` gelesen und mit `studio-profile update --equipment NAME [...]` vollständig und editierbar gespeichert. `studio-profile update` ohne `--equipment` setzt es bewusst auf Bodyweight beziehungsweise keine Geräte zurück. `draft capabilities` zeigt alle unterstützten Geräte, Fokusbereiche, Einschränkungen und Übungsnamen. Unbekannte Werte und Tippfehler werden abgewiesen statt ignoriert.
-
-Die Übungsauswahl ist deterministisch und erfolgt ausschließlich aus einer kuratierten lokalen Bibliothek mit 33 Übungen; es gibt keinen Cloud-Aufruf. Je nach Anzahl der Trainingstage entstehen Ganzkörper-, Ober-/Unterkörper- oder Push/Pull/Beine-Aufteilungen. Satz- und Wiederholungsziele unterscheiden Haupt- und Zubehörübungen sowie Ziel und Erfahrung. Das Dauerbudget berücksichtigt Sätze, Pausen und Gerätewechsel. Gerätefreie Varianten dienen als kontrollierter Fallback, nicht als zufälliger Ersatz.
-
-```bash
-python3 skills/gym/scripts/gympilot.py --json studio-profile update --equipment barbell --equipment bench --equipment dumbbell
-python3 skills/gym/scripts/gympilot.py --json draft generate --goal muscle_gain --day 1 --day 4 --duration 45 --experience intermediate --focus chest --avoid "Push-up" --restriction no_overhead
-```
-
 ### Gesamtvorschau, Änderung und Bestätigung
 
-`draft show` liefert den persistenten Entwurf nach jeder Unterbrechung zusammen mit einer monotonen `revision` und einem SHA-256-`content_hash` über das kanonische Plan-JSON. Mit `draft routine-update ... --revision REVISION` und `draft exercise-update ... --revision REVISION` lassen sich bestätigte Änderungswünsche strukturiert anwenden. Jede Änderung erhöht die Revision und erzeugt einen neuen Hash; danach muss der Gesamtplan erneut gezeigt werden. Generator-Metadaten sind ausschließlich unveränderten lokalen Generatorentwürfen vorbehalten: Imports dürfen nur `routines` enthalten, und eine strukturierte Änderung entfernt die Generator-Provenienz. Unveränderte Generatorentwürfe werden bei der Bestätigung deterministisch neu geprüft.
+`draft show` liefert den persistenten Entwurf nach jeder Unterbrechung zusammen mit einer monotonen `revision` und einem SHA-256-`content_hash` über das kanonische Plan-JSON. Mit `draft routine-update ... --revision REVISION` und `draft exercise-update ... --revision REVISION` lassen sich bestätigte Änderungswünsche strukturiert anwenden. Jede Änderung erhöht die Revision und erzeugt einen neuen Hash; danach muss der Gesamtplan erneut gezeigt werden. Imports dürfen nur `routines` enthalten. Historische Alpha-3-Entwürfe mit Generator-Metadaten bleiben aus Kompatibilitätsgründen lesbar und sicher bestätigbar, können aber nicht mehr neu erzeugt werden.
 
 Erst nachdem der vollständige aktuelle Plan als Ganzes bestätigt wurde, materialisiert `draft confirm --revision REVISION --content-hash HASH` exakt diesen Entwurf in einer atomaren Transaktion. Veraltete Vorschauen, parallele Bestätigungen und manipulierte Entwürfe werden abgewiesen. Eine laufende Session blockiert den Austausch und löst einen vollständigen Rollback aus. Historische Sessions, Sätze und Gerätealiases werden nicht geändert. `draft discard --revision REVISION` verwirft nur den Entwurf.
 

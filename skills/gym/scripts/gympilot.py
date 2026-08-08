@@ -418,6 +418,56 @@ def today_data(routine_id: int | None = None) -> dict:
             "last_session": dict(last) if last else None, "plan": plan()}
 
 
+def overview_data(reference_date: date | None = None) -> dict:
+    """Return local dashboard metrics, a 12-week series and recent sessions."""
+    ensure()
+    current = reference_date or date.today()
+    week_start = current - timedelta(days=current.weekday())
+    series_start = week_start - timedelta(weeks=11)
+    week_end = week_start + timedelta(days=7)
+    with connect() as con:
+        aggregate_sql = """SELECT COUNT(DISTINCT s.id) sessions,COUNT(w.id) sets,
+            COALESCE(SUM(w.reps),0) reps,ROUND(COALESCE(SUM(w.weight_kg*w.reps),0),1) volume
+            FROM sessions s LEFT JOIN workout_sets w ON w.session_id=s.id
+            WHERE s.completed_at IS NOT NULL"""
+        totals = dict(con.execute(aggregate_sql).fetchone())
+        this_week = dict(con.execute(
+            aggregate_sql + " AND s.session_date>=? AND s.session_date<?",
+            (week_start.isoformat(), week_end.isoformat()),
+        ).fetchone())
+        session_rows = rows(con.execute("""SELECT s.id,s.session_date,r.name routine_name,
+            COUNT(w.id) sets,COALESCE(SUM(w.reps),0) reps,
+            ROUND(COALESCE(SUM(w.weight_kg*w.reps),0),1) volume
+            FROM sessions s JOIN routines r ON r.id=s.routine_id
+            LEFT JOIN workout_sets w ON w.session_id=s.id
+            WHERE s.completed_at IS NOT NULL AND s.session_date>=?
+            GROUP BY s.id ORDER BY s.session_date DESC,s.id DESC""",
+            (series_start.isoformat(),)))
+        recent_sessions = session_rows[:8]
+        buckets = []
+        for offset in range(12):
+            start = series_start + timedelta(weeks=offset)
+            end = start + timedelta(days=7)
+            volume = round(sum(float(item["volume"]) for item in session_rows
+                               if start.isoformat() <= item["session_date"] < end.isoformat()), 1)
+            buckets.append({"week_start": start.isoformat(), "volume": volume})
+        candidates = rows(con.execute("""SELECT r.id,r.name,d.weekday,
+            COUNT(re.id) exercise_count,COALESCE(SUM(re.planned_sets),0) planned_sets,
+            COALESCE(r.plan_position,r.id) plan_position
+            FROM routines r JOIN routine_days d ON d.routine_id=r.id
+            LEFT JOIN routine_exercises re ON re.routine_id=r.id
+            WHERE r.active=1 GROUP BY r.id,d.weekday"""))
+    next_routine = None
+    if candidates:
+        next_routine = min(candidates, key=lambda item: (
+            (item["weekday"] - current.isoweekday()) % 7,
+            item["plan_position"], item["id"],
+        ))
+    return {"date": current.isoformat(), "totals": totals, "this_week": this_week,
+            "next_routine": next_routine, "weekly_volume": buckets,
+            "recent_sessions": recent_sessions}
+
+
 def onboarding_sequence(answers: dict[str, str]) -> list[str]:
     sequence = list(PROFILE_ONBOARDING_FIELDS) + ["routine_count"]
     try:
@@ -507,7 +557,7 @@ def onboarding_status(con: sqlite3.Connection) -> dict:
     complete = next_field is None and bool(sequence)
     phase = "profile" if next_field in PROFILE_ONBOARDING_FIELDS else ("complete" if complete else "plan")
     return {"answers": answers, "next_field": next_field, "phase": phase, "complete": complete,
-            "setup_modes":["import","generate","manual"],"selected_mode":answers.get("setup_mode")}
+            "setup_modes":["import","manual"],"selected_mode":answers.get("setup_mode")}
 
 
 def hash_password(password: str) -> str:
@@ -740,17 +790,9 @@ def materialize_draft(con: sqlite3.Connection, document: dict) -> None:
                         (routine_id,exercise_id,position,exercise["sets"],exercise["min_reps"],exercise["max_reps"]))
 
 
-def generate_plan(args, equipment: list[str]) -> dict:
-    return validate_plan_document(generate_curated_plan(
-        goal=args.goal,
-        days=args.day,
-        duration_minutes=args.duration,
-        experience=args.experience,
-        equipment=equipment,
-        focus=args.focus or [],
-        avoid=args.avoid or [],
-        restrictions=args.restriction or [],
-    ))
+def draft_reference_capabilities() -> dict:
+    reference = generator_capabilities()
+    return {"equipment": reference["equipment"], "exercises": reference["exercises"]}
 
 
 class GymArgumentParser(argparse.ArgumentParser):
@@ -899,13 +941,18 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path != "/api/health" and not self.authorized(): return self.send_json({"error":"authentication required"},401)
             try:
                 if parsed.path=="/api/health": return self.send_json({"status":"ok","schema_version":SCHEMA_VERSION,"auth_required":auth_enabled()})
-                if parsed.path=="/api/today": return self.send_json(today_data())
+                if parsed.path=="/api/today":
+                    query=parse_qs(parsed.query,keep_blank_values=True)
+                    if not query: return self.send_json(today_data())
+                    if set(query)!={"routine"} or len(query["routine"])!=1:
+                        raise ValueError("today accepts exactly one routine query parameter")
+                    try: routine_id=int(query["routine"][0])
+                    except (TypeError,ValueError) as exc: raise ValueError("routine must be a positive integer") from exc
+                    if routine_id<=0 or routine_id>SQLITE_INT_MAX: raise ValueError("routine must be a positive integer")
+                    return self.send_json(today_data(routine_id))
                 if parsed.path=="/api/plan": return self.send_json(plan())
-                if parsed.path=="/api/overview":
-                    with connect() as con:
-                        d=dict(con.execute("SELECT COUNT(DISTINCT s.id) sessions,COUNT(w.id) sets,COALESCE(SUM(w.reps),0) reps,ROUND(COALESCE(SUM(w.weight_kg*w.reps),0),1) volume FROM sessions s LEFT JOIN workout_sets w ON w.session_id=s.id").fetchone())
-                    return self.send_json(d)
-            except sqlite3.Error as exc: return self.send_json({"error":str(exc)},400)
+                if parsed.path=="/api/overview": return self.send_json(overview_data())
+            except (sqlite3.Error,ValueError) as exc: return self.send_json({"error":str(exc)},400)
             return self.send_json({"error":"not found"},404)
         self.serve_static(parsed.path)
     def do_POST(self):
@@ -1001,7 +1048,7 @@ def command(args):
             row=con.execute("SELECT equipment_json,updated_at FROM studio_profile WHERE id=1").fetchone()
             return {"equipment":json.loads(row["equipment_json"]),"updated_at":row["updated_at"]}
     if args.command=="draft":
-        if args.action=="capabilities": return generator_capabilities()
+        if args.action=="capabilities": return draft_reference_capabilities()
         with connect() as con:
             if args.action=="import":
                 imported=strict_json_loads(args.plan_json.encode("utf-8"))
@@ -1016,16 +1063,7 @@ def command(args):
                 revision=current["revision"]+1 if current else 1
                 con.execute("INSERT INTO plan_drafts(id,mode,payload_json,revision,content_hash,status,created_at,updated_at,confirmed_at) VALUES(1,'import',?,?,?,'draft',?,?,NULL) ON CONFLICT(id) DO UPDATE SET mode='import',payload_json=excluded.payload_json,revision=excluded.revision,content_hash=excluded.content_hash,status='draft',created_at=excluded.created_at,updated_at=excluded.updated_at,confirmed_at=NULL",
                             (payload,revision,content_hash,stamp,stamp))
-            if args.action=="generate":
-                equipment=json.loads(con.execute("SELECT equipment_json FROM studio_profile WHERE id=1").fetchone()[0])
-                document=generate_plan(args,equipment); payload=canonical_plan_json(document); content_hash=hashlib.sha256(payload.encode()).hexdigest(); stamp=now()
-                con.execute("BEGIN IMMEDIATE")
-                current=con.execute("SELECT revision FROM plan_drafts WHERE id=1").fetchone()
-                if current and args.replace_revision is None: raise ValueError("existing draft requires --replace-revision")
-                if current and args.replace_revision!=current["revision"]: raise ValueError("draft revision mismatch")
-                revision=current["revision"]+1 if current else 1
-                con.execute("INSERT INTO plan_drafts(id,mode,payload_json,revision,content_hash,status,created_at,updated_at,confirmed_at) VALUES(1,'generate',?,?,?,'draft',?,?,NULL) ON CONFLICT(id) DO UPDATE SET mode='generate',payload_json=excluded.payload_json,revision=excluded.revision,content_hash=excluded.content_hash,status='draft',created_at=excluded.created_at,updated_at=excluded.updated_at,confirmed_at=NULL",
-                            (payload,revision,content_hash,stamp,stamp))
+
             row=con.execute("SELECT * FROM plan_drafts WHERE id=1").fetchone()
             if not row: raise ValueError("no plan draft exists")
             if args.action=="discard":
@@ -1270,9 +1308,9 @@ def command(args):
 def parser():
     p=GymArgumentParser(description="GymPilot local workout tracker"); p.add_argument("--json",action="store_true"); sub=p.add_subparsers(dest="command",required=True)
     sub.add_parser("init"); sub.add_parser("status"); sub.add_parser("plan"); sub.add_parser("today")
-    o=sub.add_parser("onboarding"); osub=o.add_subparsers(dest="action",required=True); osub.add_parser("status"); m=osub.add_parser("mode"); m.add_argument("mode",choices=("import","generate","manual")); s=osub.add_parser("set"); s.add_argument("field"); s.add_argument("value")
+    o=sub.add_parser("onboarding"); osub=o.add_subparsers(dest="action",required=True); osub.add_parser("status"); m=osub.add_parser("mode"); m.add_argument("mode",choices=("import","manual")); s=osub.add_parser("set"); s.add_argument("field"); s.add_argument("value")
     sp=sub.add_parser("studio-profile"); sps=sp.add_subparsers(dest="action",required=True); sps.add_parser("show"); u=sps.add_parser("update"); u.add_argument("--equipment",action="append")
-    d=sub.add_parser("draft"); ds=d.add_subparsers(dest="action",required=True); ds.add_parser("show"); ds.add_parser("capabilities"); discard=ds.add_parser("discard"); discard.add_argument("--revision",type=safe_int,required=True); i=ds.add_parser("import"); i.add_argument("plan_json"); i.add_argument("--replace-revision",type=safe_int); g=ds.add_parser("generate"); g.add_argument("--goal",required=True,choices=GENERATOR_GOALS); g.add_argument("--day",type=safe_int,action="append",required=True,choices=range(1,8)); g.add_argument("--duration",type=safe_int,required=True,choices=range(20,181)); g.add_argument("--experience",required=True,choices=GENERATOR_EXPERIENCE); g.add_argument("--focus",action="append",choices=GENERATOR_FOCUS_AREAS); g.add_argument("--avoid",action="append"); g.add_argument("--restriction",action="append",choices=GENERATOR_RESTRICTIONS); g.add_argument("--replace-revision",type=safe_int); ru=ds.add_parser("routine-update"); ru.add_argument("routine_index",type=positive_int); ru.add_argument("--name"); ru.add_argument("--day",type=safe_int,action="append",choices=range(1,8)); ru.add_argument("--revision",type=safe_int,required=True); eu=ds.add_parser("exercise-update"); eu.add_argument("routine_index",type=positive_int); eu.add_argument("exercise_index",type=positive_int); eu.add_argument("--name"); eu.add_argument("--sets",type=safe_int); eu.add_argument("--min-reps",type=safe_int); eu.add_argument("--max-reps",type=safe_int); eu.add_argument("--revision",type=safe_int,required=True); c=ds.add_parser("confirm"); c.add_argument("--revision",type=safe_int,required=True); c.add_argument("--content-hash",required=True)
+    d=sub.add_parser("draft"); ds=d.add_subparsers(dest="action",required=True); ds.add_parser("show"); ds.add_parser("capabilities"); discard=ds.add_parser("discard"); discard.add_argument("--revision",type=safe_int,required=True); i=ds.add_parser("import"); i.add_argument("plan_json"); i.add_argument("--replace-revision",type=safe_int); ru=ds.add_parser("routine-update"); ru.add_argument("routine_index",type=positive_int); ru.add_argument("--name"); ru.add_argument("--day",type=safe_int,action="append",choices=range(1,8)); ru.add_argument("--revision",type=safe_int,required=True); eu=ds.add_parser("exercise-update"); eu.add_argument("routine_index",type=positive_int); eu.add_argument("exercise_index",type=positive_int); eu.add_argument("--name"); eu.add_argument("--sets",type=safe_int); eu.add_argument("--min-reps",type=safe_int); eu.add_argument("--max-reps",type=safe_int); eu.add_argument("--revision",type=safe_int,required=True); c=ds.add_parser("confirm"); c.add_argument("--revision",type=safe_int,required=True); c.add_argument("--content-hash",required=True)
     r=sub.add_parser("routine"); rs=r.add_subparsers(dest="action",required=True); rs.add_parser("list")
     a=rs.add_parser("add"); a.add_argument("name"); a.add_argument("--weekday",type=safe_int,action="append",required=True,choices=range(1,8)); a.add_argument("--notes",default="")
     a=rs.add_parser("update"); a.add_argument("id",type=safe_int); a.add_argument("--name"); a.add_argument("--weekday",type=safe_int,action="append",choices=range(1,8)); a.add_argument("--notes")

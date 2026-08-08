@@ -3,28 +3,68 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#090a0d">
+  <meta name="theme-color" content="#08090d">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="GymPilot">
-  <title>GymPilot</title>
+  <title>GymPilot · Training Cockpit</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-<header><b>GYMPILOT</b><span><button id="logout" hidden>ABMELDEN</button> <i id="health">LOKAL</i></span></header>
-<dialog id="login"><form id="loginForm"><h2>GymPilot entsperren</h2><p>Das Passwort bleibt auf dieser lokalen Verbindung.</p><input id="password" type="password" autocomplete="current-password" required><button>Anmelden</button><small id="loginError"></small></form></dialog>
+<header class="app-header">
+  <div class="brand"><img src="/icons/icon.svg" alt="" width="32" height="32"><strong>Training Cockpit</strong></div>
+  <div class="connection"><button id="logout" hidden>Abmelden</button><span id="healthDot" class="status-dot" aria-hidden="true"></span><span id="health" class="sr-only">Lokal</span></div>
+</header>
+<dialog id="login"><form id="loginForm"><h2>GymPilot entsperren</h2><p>Das Passwort bleibt auf dieser lokalen Verbindung.</p><label for="password">Passwort</label><input id="password" type="password" autocomplete="current-password" required><button>Anmelden</button><small id="loginError"></small></form></dialog>
+
 <main>
-  <section class="view" data-view="today" id="today-view">
-    <section class="hero"><small>HEUTE</small><h1 id="title">Dein Training,<br><em>klar im Blick.</em></h1><p id="subtitle">Privater Trainingsplan wird geladen …</p></section>
-    <section><div class="heading"><h2>Heutiger Plan</h2><span id="progress">0%</span></div><div id="todayPlan" class="cards"></div></section>
-    <section><div class="heading"><h2>Vergleichstraining</h2></div><article class="last" id="last">Noch kein abgeschlossenes Training.</article></section>
+  <section class="view" data-view="overview" id="overview-view">
+    <div class="intro"><p class="eyebrow"><span>LOKALES DASHBOARD</span><span id="dashboardDate">–</span></p><h1>Fortschritt,<br><em>der sichtbar wird.</em></h1><p>Jeder Satz, jedes Gewicht und jede Wiederholung übersichtlich an einem Ort.</p></div>
+    <article class="feature-card" id="nextTraining"><span class="skeleton">Nächste Einheit wird geladen …</span></article>
+    <section class="metric-grid" aria-label="Wochenübersicht">
+      <article><span>Einheiten</span><strong id="weekSessions">0</strong><small>diese Woche</small></article>
+      <article><span>Arbeitssätze</span><strong id="weekSets">0</strong><small>protokolliert</small></article>
+      <article><span>Wiederholungen</span><strong id="weekReps">0</strong><small>über alle Übungen</small></article>
+      <article class="accent-card"><span>Trainingsvolumen</span><strong id="weekVolume">0 kg</strong><small>Gewicht × Wiederholungen</small></article>
+    </section>
+    <article class="panel chart-panel"><div class="panel-head"><div><span class="eyebrow">LETZTE 12 WOCHEN</span><h2>Trainingsvolumen</h2></div><span class="legend"><i></i> Volumen</span></div><div id="overviewChart" class="chart-wrap"></div></article>
+    <article class="panel"><div class="panel-head"><div><span class="eyebrow">VERLAUF</span><h2>Letzte Einheiten</h2></div></div><div id="overviewHistory" class="history-list"></div></article>
   </section>
-  <section class="view" data-view="plan" id="plan-view" hidden><div class="heading"><h2>Trainingsplan</h2></div><div id="allPlans" class="cards"></div></section>
-  <section class="view" data-view="progress" id="progress-view" hidden><div class="heading"><h2>Fortschritt</h2></div><section class="metrics"><article><small>EINHEITEN</small><strong id="sessions">0</strong></article><article><small>SÄTZE</small><strong id="sets">0</strong></article><article><small>VOLUMEN</small><strong id="volume">0 kg</strong></article></section></section>
-  <section class="view" data-view="settings" id="settings-view" hidden><div class="heading"><h2>Einstellungen</h2></div><article class="last" id="profile">Lokal und privat.</article></section>
+
+  <section class="view" data-view="training" id="training-view" hidden>
+    <div class="section-title"><span class="eyebrow">DEINE EINHEIT</span><h1 id="trainingDay">Training</h1><p id="trainingName">Plan wird geladen …</p></div>
+    <div id="daySelector" class="day-selector" aria-label="Trainingstag auswählen"></div>
+    <article id="comparison" class="panel comparison"></article>
+    <p class="helper">Gewichte und Wiederholungen stammen aus der letzten abgeschlossenen Einheit dieses Trainingstags.</p>
+    <div id="trainingExercises" class="exercise-list"></div>
+  </section>
+
+  <section class="view" data-view="progress" id="progress-view" hidden>
+    <div class="section-title"><span class="eyebrow">AUSWERTUNG</span><h1>Fortschritt</h1><p>Gesamtwerte und Entwicklung deiner abgeschlossenen Einheiten.</p></div>
+    <section class="metric-grid totals" aria-label="Gesamtfortschritt">
+      <article><span>Einheiten gesamt</span><strong id="totalSessions">0</strong></article>
+      <article><span>Sätze gesamt</span><strong id="totalSets">0</strong></article>
+      <article><span>Wiederholungen</span><strong id="totalReps">0</strong></article>
+      <article class="accent-card"><span>Gesamtvolumen</span><strong id="totalVolume">0 kg</strong></article>
+    </section>
+    <article class="panel chart-panel"><div class="panel-head"><div><span class="eyebrow">LETZTE 12 WOCHEN</span><h2>Volumenentwicklung</h2></div><span class="legend"><i></i> Volumen</span></div><div id="progressChart" class="chart-wrap"></div></article>
+    <article class="panel"><div class="panel-head"><div><span class="eyebrow">TRAININGSHISTORIE</span><h2>Letzte Einheiten</h2></div></div><div id="progressHistory" class="history-list"></div></article>
+  </section>
+
+  <section class="view" data-view="plan" id="plan-view" hidden>
+    <div class="section-title"><span class="eyebrow">DEIN PROGRAMM</span><h1>Trainingsplan</h1><p>Alle Trainingstage, Übungen und Zielbereiche.</p></div>
+    <div id="allPlans" class="plan-list"></div>
+  </section>
 </main>
-<nav aria-label="Hauptnavigation"><a class="active" data-target="today" href="#today">⌂<span>Heute</span></a><a data-target="plan" href="#plan">▤<span>Plan</span></a><a data-target="progress" href="#progress">↗<span>Fortschritt</span></a><a data-target="settings" href="#settings">⚙<span>Profil</span></a></nav>
+
+<nav aria-label="Hauptnavigation">
+  <a class="active" data-target="overview" href="#overview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v10h-6zM4 14h6v6H4zM14 18h6v2h-6z"/></svg><span>Übersicht</span></a>
+  <a data-target="training" href="#training"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6M6 7v10M18 7v10M21 9v6M6 12h12"/></svg><span>Training</span></a>
+  <a data-target="progress" href="#progress"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 17 5-5 4 3 7-8M16 7h4v4"/></svg><span>Fortschritt</span></a>
+  <a data-target="plan" href="#plan"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18H5zM8 7h8M8 11h8M8 15h8"/></svg><span>Plan</span></a>
+</nav>
 <script src="/app.js" defer></script>
-</body></html>
+</body>
+</html>
