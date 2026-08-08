@@ -41,7 +41,7 @@ Alternativ kann die GitHub-Pfad-ID verwendet werden:
 hermes skills install LOGIN-TB/hermes-toolbox/skills/gym
 ```
 
-Danach eine neue Hermes-Sitzung starten oder, falls verfügbar, `/reload-skills` aufrufen. Das Onboarding beginnt mit `/gym setup`.
+Wurde GymPilot aus einem bereits laufenden Telegram-/Gateway-Chat installiert, muss anschließend im Chat **zwingend** `/reload-skills` gesendet werden. Der Gateway-Prozess hält die Liste dynamischer Skill-Befehle im Speicher; eine neue Unterhaltung allein aktualisiert diese Liste nicht. Erst wenn Hermes `gym` als hinzugefügten oder vorhandenen Skill bestätigt, mit `/gym setup` beginnen. Bleibt `/gym` unbekannt, einmal `/restart` senden und danach `/gym setup` erneut aufrufen.
 
 ### Aktualisieren
 
@@ -49,6 +49,8 @@ Danach eine neue Hermes-Sitzung starten oder, falls verfügbar, `/reload-skills`
 hermes skills check
 hermes skills update
 ```
+
+Nach einem Update aus einem laufenden Gateway-Chat ebenfalls `/reload-skills` senden; falls der Befehl danach noch nicht verfügbar ist, `/restart` verwenden.
 
 Installierte Dateien nicht von Hand bearbeiten. Eine Aktualisierung ersetzt den Skillcode und seine Webdateien. Profil, Trainingsdaten, Backups und Exporte liegen außerhalb des Skillverzeichnisses und bleiben erhalten.
 
