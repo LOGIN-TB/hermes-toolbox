@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+*.db
+*.db-wal
+*.db-shm
+exports/
+backups/
