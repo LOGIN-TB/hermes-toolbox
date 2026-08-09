@@ -1610,7 +1610,7 @@ class GymPilotTest(unittest.TestCase):
 
     def test_skill_declares_bare_gym_entrypoint_and_home_command(self):
         skill = (ROOT / "skills" / "gym" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("version: 0.1.0-alpha.7", skill)
+        self.assertIn("version: 0.1.0-alpha.8", skill)
         self.assertIn("## `/gym`: stabiler Einstieg", skill)
         self.assertIn('python3 "$GYM_CLI" --json home', skill)
         self.assertIn("loginctl enable-linger BENUTZER", skill)

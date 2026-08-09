@@ -1246,8 +1246,14 @@ def manage_dashboard_service(action,system_name=None,user_home=None,executable=N
         message=(result.stderr or result.stdout or "systemctl is-active failed").strip()
         raise OSError(message)
 
-    systemd_env={key:os.environ[key] for key in ("PATH","HOME","USER","LOGNAME","LANG","LC_ALL","LC_CTYPE") if key in os.environ}
     uid=os.getuid()
+    account=pwd.getpwuid(uid)
+    systemd_env={
+        "PATH":os.pathsep.join(os.get_exec_path()),
+        "HOME":account.pw_dir,
+        "USER":account.pw_name,
+        "LOGNAME":account.pw_name,
+    }
     systemd_env["XDG_RUNTIME_DIR"]=f"/run/user/{uid}"
     systemd_env["DBUS_SESSION_BUS_ADDRESS"]=f"unix:path=/run/user/{uid}/bus"
     def systemd_run(arguments,check=True):
@@ -1256,7 +1262,7 @@ def manage_dashboard_service(action,system_name=None,user_home=None,executable=N
         manager=systemd_run(["is-system-running"],check=False)
         manager_state=(manager.stdout or "").strip().lower()
         if manager.returncode and manager_state not in {"running","degraded"}:
-            user_name=pwd.getpwuid(uid).pw_name
+            user_name=account.pw_name
             detail=(manager.stderr or manager.stdout or "systemd user manager is unavailable").strip()
             raise OSError(
                 f"systemd --user is unavailable for {user_name} (uid {uid}): {detail}. "
