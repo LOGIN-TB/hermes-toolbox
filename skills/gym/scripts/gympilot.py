@@ -418,6 +418,44 @@ def today_data(routine_id: int | None = None) -> dict:
             "last_session": dict(last) if last else None, "plan": plan()}
 
 
+def home_data() -> dict:
+    """Return the stable landing payload used by the bare ``/gym`` command."""
+    today = today_data()
+    if today["active_session"]:
+        state = "training"
+        actions = [
+            {"command": "/gym today", "description": "Laufendes Training fortsetzen"},
+            {"command": "/gym plan", "description": "Trainingsplan anzeigen"},
+            {"command": "/gym status", "description": "Lokalen Status prüfen"},
+        ]
+    elif not today["plan"]:
+        state = "setup_required"
+        actions = [
+            {"command": "/gym setup", "description": "Trainingsplan einrichten"},
+            {"command": "/gym status", "description": "Lokalen Status prüfen"},
+        ]
+    elif today["routine"]:
+        state = "ready"
+        actions = [
+            {"command": "/gym today", "description": "Heutiges Training anzeigen oder starten"},
+            {"command": "/gym plan", "description": "Trainingsplan anzeigen oder ändern"},
+            {"command": "/gym status", "description": "Lokalen Status prüfen"},
+        ]
+    else:
+        state = "no_training_today"
+        actions = [
+            {"command": "/gym plan", "description": "Trainingsplan und nächste Trainingstage anzeigen"},
+            {"command": "/gym status", "description": "Lokalen Status prüfen"},
+        ]
+    return {
+        "slash_command": "/gym",
+        "state": state,
+        "primary_action": actions[0]["command"],
+        "actions": actions,
+        "today": today,
+    }
+
+
 def overview_data(reference_date: date | None = None) -> dict:
     """Return local dashboard metrics, a 12-week series and recent sessions."""
     ensure()
@@ -1036,6 +1074,7 @@ def command(args):
     if args.command=="status":
         with connect() as con: counts={t:con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("routines","exercises","equipment_aliases","sessions","workout_sets")}
         return {"ok":True,"schema_version":SCHEMA_VERSION,"data_dir":str(data_dir()),"database":str(db_path()),"auth_enabled":auth_enabled(),**counts}
+    if args.command=="home": return home_data()
     if args.command=="studio-profile":
         with connect() as con:
             if args.action=="update":
@@ -1307,7 +1346,7 @@ def command(args):
 
 def parser():
     p=GymArgumentParser(description="GymPilot local workout tracker"); p.add_argument("--json",action="store_true"); sub=p.add_subparsers(dest="command",required=True)
-    sub.add_parser("init"); sub.add_parser("status"); sub.add_parser("plan"); sub.add_parser("today")
+    sub.add_parser("init"); sub.add_parser("home"); sub.add_parser("status"); sub.add_parser("plan"); sub.add_parser("today")
     o=sub.add_parser("onboarding"); osub=o.add_subparsers(dest="action",required=True); osub.add_parser("status"); m=osub.add_parser("mode"); m.add_argument("mode",choices=("import","manual")); s=osub.add_parser("set"); s.add_argument("field"); s.add_argument("value")
     sp=sub.add_parser("studio-profile"); sps=sp.add_subparsers(dest="action",required=True); sps.add_parser("show"); u=sps.add_parser("update"); u.add_argument("--equipment",action="append")
     d=sub.add_parser("draft"); ds=d.add_subparsers(dest="action",required=True); ds.add_parser("show"); ds.add_parser("capabilities"); discard=ds.add_parser("discard"); discard.add_argument("--revision",type=safe_int,required=True); i=ds.add_parser("import"); i.add_argument("plan_json"); i.add_argument("--replace-revision",type=safe_int); ru=ds.add_parser("routine-update"); ru.add_argument("routine_index",type=positive_int); ru.add_argument("--name"); ru.add_argument("--day",type=safe_int,action="append",choices=range(1,8)); ru.add_argument("--revision",type=safe_int,required=True); eu=ds.add_parser("exercise-update"); eu.add_argument("routine_index",type=positive_int); eu.add_argument("exercise_index",type=positive_int); eu.add_argument("--name"); eu.add_argument("--sets",type=safe_int); eu.add_argument("--min-reps",type=safe_int); eu.add_argument("--max-reps",type=safe_int); eu.add_argument("--revision",type=safe_int,required=True); c=ds.add_parser("confirm"); c.add_argument("--revision",type=safe_int,required=True); c.add_argument("--content-hash",required=True)

@@ -43,7 +43,9 @@ Alternativ kann die GitHub-Pfad-ID verwendet werden:
 hermes skills install LOGIN-TB/hermes-toolbox/skills/gym
 ```
 
-Wurde GymPilot aus einem bereits laufenden Telegram-/Gateway-Chat installiert, muss anschließend im Chat **zwingend** `/reload-skills` gesendet werden. Der Gateway-Prozess hält die Liste dynamischer Skill-Befehle im Speicher; eine neue Unterhaltung allein aktualisiert diese Liste nicht. Erst wenn Hermes `gym` als hinzugefügten oder vorhandenen Skill bestätigt, mit `/gym setup` beginnen. Bleibt `/gym` unbekannt, einmal `/restart` senden und danach `/gym setup` erneut aufrufen.
+Wurde GymPilot aus einem bereits laufenden Telegram-/Gateway-Chat installiert, muss anschließend im Chat **zwingend** `/reload-skills` gesendet werden. Der Gateway-Prozess hält die Liste dynamischer Skill-Befehle im Speicher; eine neue Unterhaltung allein aktualisiert diese Liste nicht. Danach `/commands` öffnen und den echten Einstieg `/gym` manuell aufrufen. Das sichtbare Telegram-Befehlsmenü wird erst beim Gateway-Start registriert: Deshalb danach `/restart` senden und den Menüeintrag separat prüfen. Telegram begrenzt dieses Menü; fehlt `/gym` trotz funktionierendem manuellem Aufruf, sind das Menülimit beziehungsweise weitere lokale Skills mögliche Ursachen. Ebenso müssen ein erfolgreicher Gateway-Neustart und die `set_my_commands`-Meldungen der Telegram-Bot-API in den Gateway-Logs geprüft werden.
+
+Ein Aufruf von `/gym` ohne Unterbefehl ist der stabile Startpunkt. GymPilot liest dafür den lokalen Zustand über `gympilot.py --json home`: Ohne Plan führt er zu `/gym setup`, mit heutiger Routine zeigt er das Training, ohne heutige Routine verweist er auf den Plan, und bei einer laufenden Einheit setzt er diese auch nach einer externen Plandeaktivierung fort. Der erste Aufruf initialisiert bei Bedarf das profilbezogene Datenverzeichnis und die SQLite-Datenbank. Damit ist ein bloßes Reagieren des Sprachmodells auf den Text `/gym` nicht mehr mit einer erfolgreichen Skillregistrierung zu verwechseln.
 
 ### Aktualisieren
 
@@ -85,6 +87,7 @@ Browser behandeln Loopback als sicheren Kontext; dort kann der Service Worker re
 Häufig verwendete Befehle:
 
 ```bash
+python3 skills/gym/scripts/gympilot.py --json home
 python3 skills/gym/scripts/gympilot.py --json status
 python3 skills/gym/scripts/gympilot.py --json today
 python3 skills/gym/scripts/gympilot.py --json plan

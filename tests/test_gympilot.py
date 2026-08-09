@@ -1104,6 +1104,87 @@ class GymPilotTest(unittest.TestCase):
         self.assertEqual(current[0]["weekdays"], [2])
         self.assertEqual(current[0]["exercises"][0]["planned_sets"], 4)
 
+    def test_skill_declares_bare_gym_entrypoint_and_home_command(self):
+        skill = (ROOT / "skills" / "gym" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("version: 0.1.0-alpha.4", skill)
+        self.assertIn("## `/gym`: stabiler Einstieg", skill)
+        self.assertIn('python3 "$GYM_CLI" --json home', skill)
+        self.assertIn("Telegram-Befehlsmenü", skill)
+        self.assertIn("mögliche Ursache", skill)
+        self.assertIn("Gateway-Logs", skill)
+        self.assertNotIn("ist das konfigurierte Menülimit erreicht", skill)
+
+    def test_home_entrypoint_guides_bare_gym_command_from_setup_to_training(self):
+        first = self.cli("home")[1]
+        self.assertIsNotNone(first)
+        assert first is not None
+        self.assertEqual(first["slash_command"], "/gym")
+        self.assertEqual(first["state"], "setup_required")
+        self.assertEqual(first["primary_action"], "/gym setup")
+        self.assertEqual(
+            [action["command"] for action in first["actions"]],
+            ["/gym setup", "/gym status"],
+        )
+
+        routine = self.routine("Ganzkörper", date.today().isoweekday())
+        self.exercise(routine["id"], "Kniebeuge")
+        ready = self.cli("home")[1]
+        self.assertIsNotNone(ready)
+        assert ready is not None
+        self.assertEqual(ready["state"], "ready")
+        self.assertEqual(ready["primary_action"], "/gym today")
+        self.assertEqual(ready["today"]["routine"]["name"], "Ganzkörper")
+        self.assertEqual(
+            [action["command"] for action in ready["actions"]],
+            ["/gym today", "/gym plan", "/gym status"],
+        )
+
+        session = self.cli("session", "start", "--routine", routine["id"])[1]
+        active = self.cli("home")[1]
+        self.assertIsNotNone(active)
+        assert active is not None
+        self.assertEqual(active["state"], "training")
+        self.assertEqual(active["primary_action"], "/gym today")
+        self.assertEqual(active["today"]["active_session"]["id"], session["id"])
+
+    def test_home_entrypoint_handles_a_plan_without_a_routine_today(self):
+        other_day = date.today().isoweekday() % 7 + 1
+        routine = self.routine("Anderer Tag", other_day)
+        self.assertIsNotNone(routine)
+        assert routine is not None
+        self.exercise(routine["id"], "Rudern")
+
+        home = self.cli("home")[1]
+        self.assertIsNotNone(home)
+        assert home is not None
+        self.assertEqual(home["state"], "no_training_today")
+        self.assertEqual(home["primary_action"], "/gym plan")
+        self.assertIsNone(home["today"]["routine"])
+        self.assertEqual(
+            [action["command"] for action in home["actions"]],
+            ["/gym plan", "/gym status"],
+        )
+
+    def test_home_entrypoint_prioritizes_an_active_session_over_an_externally_disabled_plan(self):
+        routine = self.routine("Recovery", date.today().isoweekday())
+        self.assertIsNotNone(routine)
+        assert routine is not None
+        self.exercise(routine["id"], "Drücken")
+        session = self.cli("session", "start", "--routine", routine["id"])[1]
+        self.assertIsNotNone(session)
+        assert session is not None
+        with sqlite3.connect(self.home / "gympilot" / "gympilot.db") as con:
+            con.execute("UPDATE routines SET active=0 WHERE id=?", (routine["id"],))
+
+        home = self.cli("home")[1]
+        self.assertIsNotNone(home)
+        assert home is not None
+        self.assertEqual(home["state"], "training")
+        self.assertEqual(home["primary_action"], "/gym today")
+        self.assertEqual(home["today"]["active_session"]["id"], session["id"])
+        self.assertEqual(home["today"]["routine"]["id"], routine["id"])
+        self.assertEqual(home["today"]["plan"], [])
+
     def test_onboarding_exposes_only_import_and_manual_setup(self):
         status = self.cli("onboarding", "status")[1]
         self.assertEqual(status["setup_modes"], ["import", "manual"])

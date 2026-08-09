@@ -1,7 +1,7 @@
 ---
 name: gym
 description: Lokale Trainingspläne importieren oder manuell pflegen und Training protokollieren.
-version: 0.1.0-alpha.3
+version: 0.1.0-alpha.4
 author: LOGIN-TB contributors
 license: MIT
 platforms: [linux, macos]
@@ -20,6 +20,23 @@ Zur vollständig lokalen Web-App gehören [HTML](assets/web/index.html), [JavaSc
 GYM_CLI="<installiertes-skill-verzeichnis>/scripts/gympilot.py"
 python3 "$GYM_CLI" --json status
 ```
+
+## `/gym`: stabiler Einstieg
+
+Der installierte Skillname `gym` ist der dynamische Hermes-Befehl `/gym`. Wird `/gym` ohne Unterbefehl aufgerufen, immer zuerst den lokalen Einstieg laden und dessen Zustand verwenden; nicht nur aus Chatverlauf oder Erinnerung antworten:
+
+```bash
+python3 "$GYM_CLI" --json home
+```
+
+Der erste Aufruf initialisiert bei Bedarf das profilbezogene GymPilot-Datenverzeichnis und die SQLite-Datenbank.
+
+- `setup_required`: knapp erklären, dass noch kein Plan eingerichtet ist, und `/gym setup` als primäre Aktion anbieten.
+- `ready`: die heutige Routine aus `today` zusammenfassen und `/gym today`, `/gym plan` und `/gym status` anbieten.
+- `no_training_today`: erklären, dass für heute keine Routine geplant ist, und `/gym plan` als primäre Aktion anbieten; keine heutige Routine erfinden.
+- `training`: die laufende Einheit aus `today.active_session` fortsetzen und die bereits erfassten Sätze ausgeben.
+
+Nach Installation oder Aktualisierung in einem laufenden Gateway `/reload-skills` ausführen. Danach muss `/gym` über `/commands` auffindbar und manuell aufrufbar sein. Das sichtbare Telegram-Befehlsmenü wird erst beim Gateway-Start über die Bot API registriert und ist kapazitätsbegrenzt; deshalb anschließend `/restart` ausführen und die Sichtbarkeit separat prüfen. Fehlt `/gym` trotz erfolgreichem manuellem Aufruf weiterhin im Menü, ist das konfigurierte Menülimit eine mögliche Ursache. Zusätzlich den erfolgreichen Gateway-Neustart und in den Gateway-Logs die Bot-API-Registrierung `set_my_commands` für den betroffenen Telegram-Scope prüfen. Einsatzbereitschaft erst bestätigen, wenn der echte Aufruf `/gym` den oben beschriebenen `home`-Einstieg ausführt; Menü-Sichtbarkeit ist eine zusätzliche, konfigurationsabhängige UX-Prüfung.
 
 ## `/gym setup`: Gesamtplan statt Formular-Chat
 
