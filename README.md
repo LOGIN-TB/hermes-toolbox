@@ -16,7 +16,7 @@ GymPilot ist ein lokaler Trainingstracker mit mobiler Weboberfläche und PWA-Dat
 - JSON-Ausgabe für Hermes und lesbare Terminalausgabe
 - mobile Oberfläche; als PWA installierbar, wenn der Browser einen sicheren Kontext bereitstellt
 - persistenter, profilbezogener Dashboard-Service über `launchd` (macOS) oder `systemd --user` (Linux), unabhängig vom Hermes-Gateway
-- persistenter Service fest und sicher an `127.0.0.1:8765`; abweichende Bindungen nur beim bewusst gestarteten Vordergrundserver
+- persistenter Service standardmäßig an `127.0.0.1:8765`; optional explizit an eine konkrete private LAN-/VPN-Adresse, niemals an Wildcards oder öffentliche IPs
 - optionaler Passwortschutz mit gesalzenem Hash, zufälligen Sitzungscookies und begrenzten Loginversuchen
 
 ## Voraussetzungen
@@ -55,9 +55,17 @@ python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service install
 python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service status
 ```
 
+Für den ausdrücklich gewünschten Zugriff im privaten LAN wird ausschließlich die konkrete Interfaceadresse verwendet:
+
+```bash
+python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service install --host 192.168.1.90
+```
+
+`0.0.0.0`, `::`, öffentliche Adressen, Tunnel und Router-Portweiterleitungen werden nicht unterstützt. Der eingebaute HTTP-Server verschlüsselt den LAN-Verkehr nicht. Ohne über `security enable` lokal im Terminal aktivierten Passwortschutz können alle Geräte im selben Netz die Trainingsauswertung lesen.
+
 Der Service startet das lokale Dashboard unabhängig vom Gateway. Ein `/restart` des Hermes-Gateways beendet die Weboberfläche deshalb nicht mehr. Ein echter Dashboard-Absturz wird beim nächsten `/gym`-Status erkannt und kontrolliert über `service restart` behoben; der Service erzeugt bewusst keine unbegrenzte Crash-Schleife.
 
-Da der persistente Service fest an `127.0.0.1:8765` gebunden ist, kann pro Benutzer immer nur ein GymPilot-Profil gleichzeitig laufen. Unter Linux gehört der Dienst zum `systemd --user`-Manager und läuft ohne interaktive Anmeldung nur weiter, wenn der Administrator für den Benutzer bewusst Linger aktiviert hat.
+Der persistente Service verwendet standardmäßig `127.0.0.1:8765`. Eine explizit installierte private Adresse wird in der geschützten Servicebeschreibung gespeichert und bei `status`, `restart` sowie einem späteren `service install` automatisch wiederverwendet. Bei wechselnden DHCP-Adressen empfiehlt sich eine Routerreservierung. Wegen des festen Ports kann pro Benutzer immer nur ein GymPilot-Profil gleichzeitig laufen. Unter Linux gehört der Dienst zum `systemd --user`-Manager und läuft ohne interaktive Anmeldung nur weiter, wenn der Administrator für den Benutzer bewusst Linger aktiviert hat.
 
 Auf headless Linux-Systemen prüft GymPilot den User-Manager vor dem Schreiben der Unit und setzt für `systemctl --user` automatisch `XDG_RUNTIME_DIR=/run/user/UID` und `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/UID/bus`. Ist der Manager nicht verfügbar, bricht die Installation ohne Unit-Änderung ab und nennt Benutzer, UID und die erforderlichen Befehle. `loginctl enable-linger BENUTZER` ist eine dauerhafte Systemänderung und darf erst nach ausdrücklicher Zustimmung durch einen Administrator ausgeführt werden; danach ist `systemctl start user@UID.service` erforderlich. Anschließend `service install` wiederholen und `installed: true`, `running: true` sowie `healthy: true` prüfen. Ein manueller Hintergrundprozess ist kein zulässiger Ersatz. Python 3.11 oder neuer genügt; insbesondere ist Python 3.13 vollständig ausreichend.
 
@@ -69,7 +77,7 @@ hermes skills update
 python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service install
 ```
 
-`service install` ist nach jedem Skill-Update erforderlich: Es ersetzt die Service-Definition und startet das Dashboard mit dem aktualisierten Skillcode neu. Zusätzlich enthält der Health-Contract eine beim Prozessstart fixierte Code-ID, sodass ein alter, noch laufender Prozess nicht als aktuell gesund gilt. Nach einem Update aus einem laufenden Gateway-Chat ebenfalls `/reload-skills` senden; falls der Befehl danach noch nicht verfügbar ist, `/restart` verwenden.
+`service install` ist nach jedem Skill-Update erforderlich: Es ersetzt die Service-Definition und startet das Dashboard mit dem aktualisierten Skillcode neu. Eine zuvor explizit installierte private Hostadresse bleibt ohne erneute `--host`-Angabe erhalten. Zusätzlich enthält der Health-Contract eine beim Prozessstart fixierte Code-ID, sodass ein alter, noch laufender Prozess nicht als aktuell gesund gilt. Nach einem Update aus einem laufenden Gateway-Chat ebenfalls `/reload-skills` senden; falls der Befehl danach noch nicht verfügbar ist, `/restart` verwenden.
 
 Installierte Dateien nicht von Hand bearbeiten. Eine Aktualisierung ersetzt den Skillcode und seine Webdateien. Profil, Trainingsdaten, Backups und Exporte liegen außerhalb des Skillverzeichnisses und bleiben erhalten.
 
@@ -94,7 +102,7 @@ python3 skills/gym/scripts/gympilot.py exercise add 1 "Kniebeuge" --sets 3 --min
 python3 skills/gym/scripts/gympilot.py --json service install
 ```
 
-Die Web-App läuft anschließend unter <http://127.0.0.1:8765>. Für maschinenlesbare Ausgaben steht `--json` direkt vor dem jeweiligen Befehl.
+Die Web-App läuft anschließend standardmäßig unter <http://127.0.0.1:8765> oder nach einer expliziten privaten Installation unter der von `service status` ausgegebenen LAN-/VPN-Adresse. Für maschinenlesbare Ausgaben steht `--json` direkt vor dem jeweiligen Befehl.
 
 Die Erfassung von Einheiten, Sätzen, Gewichten und Wiederholungen erfolgt ausschließlich über Telegram/Hermes. Die Web-App ist eine reine Auswertungsoberfläche. Nach einem erfolgreichen Abruf speichert sie einen vollständigen, maximal 2 MB großen Auswertungs-Snapshot in IndexedDB. Ohne Serververbindung bleiben Plan, letzte Satzwerte, Verlauf und Kennzahlen mit einem sichtbaren Zeitstempel (`Offline · Stand …`) lesbar. Beim nächsten Online-Abruf wird der Snapshot vollständig ersetzt; es gibt keine Offline-Erfassung und keine Mutationswarteschlange. Bei aktiviertem Dashboard-Passwort werden keine Offline-Auswertungen gespeichert. Passwortschutz, Authentifizierungsfehler und Logout setzen vor dem Löschen zusätzlich eine nicht geheime lokale Sperrmarke. Verweigert der Browser sowohl diese Markierung als auch das Löschen aus IndexedDB, meldet die App einen Sicherheitsfehler; für einen solchen vollständigen Speicherausfall kann sie keinen Neustartschutz zusichern.
 

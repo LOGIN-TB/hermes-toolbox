@@ -646,7 +646,14 @@ def valid_host(host: str) -> bool:
     if host.lower() == "localhost": return True
     try:
         ip = ipaddress.ip_address(host)
-        return not (ip.is_unspecified or ip.is_global or ip.is_multicast)
+        if isinstance(ip,ipaddress.IPv6Address) and ip.scope_id is not None:
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}",ip.scope_id) is None: return False
+        effective=getattr(ip,"ipv4_mapped",None) or ip
+        if isinstance(effective,ipaddress.IPv4Address):
+            allowed=("127.0.0.0/8","10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","169.254.0.0/16","100.64.0.0/10")
+            return any(effective in ipaddress.ip_network(network) for network in allowed)
+        address=ipaddress.IPv6Address(int(effective))
+        return address.is_loopback or address in ipaddress.ip_network("fc00::/7") or address in ipaddress.ip_network("fe80::/10")
     except ValueError:
         return False
 
@@ -1080,9 +1087,22 @@ def _systemd_quote(value) -> str:
     return '"' + str(value).replace("%","%%").replace("\\","\\\\").replace('"','\\"') + '"'
 
 
-def dashboard_service_definition(system_name=None,user_home=None,executable=None):
+def _service_url(host,port=None) -> str:
+    port=SERVICE_PORT if port is None else port
+    authority=f"[{host}]" if host != "localhost" and ipaddress.ip_address(host).version==6 else host
+    return f"http://{authority}:{port}"
+
+
+def _service_host(host) -> str:
+    if not valid_host(host):
+        raise ValueError("host must be a concrete local, LAN, or VPN address; wildcard/public hosts are forbidden")
+    return "localhost" if host.lower()=="localhost" else ipaddress.ip_address(host).compressed
+
+
+def dashboard_service_definition(system_name=None,user_home=None,executable=None,host=None):
     system_name=system_name or platform.system()
     if system_name not in {"Darwin","Linux"}: raise ValueError("persistent dashboard service is supported on macOS and Linux")
+    host=_service_host(SERVICE_HOST if host is None else host)
     profile_root=_service_profile_root(); selected_data=_service_data_root()
     identity=dashboard_instance_id()[:12]
     raw_user_home=Path(user_home or Path.home()).expanduser().absolute()
@@ -1091,7 +1111,7 @@ def dashboard_service_definition(system_name=None,user_home=None,executable=None
     executable=Path(executable or sys.executable).resolve(strict=False)
     script=Path(__file__).resolve(); logs=selected_data/"logs"
     _reject_service_control_characters(profile_root,selected_data,user_home,executable,script,logs)
-    arguments=[str(executable),str(script),"server","--host",SERVICE_HOST,"--port",str(SERVICE_PORT)]
+    arguments=[str(executable),str(script),"server","--host",host,"--port",str(SERVICE_PORT)]
     environment={"HERMES_HOME":str(profile_root),"GYMPILOT_DATA_DIR":str(selected_data),"PYTHONDONTWRITEBYTECODE":"1"}
     if system_name=="Darwin":
         label=f"de.login.gympilot.dashboard.{identity}"
@@ -1102,7 +1122,7 @@ def dashboard_service_definition(system_name=None,user_home=None,executable=None
             "StandardOutPath":str(logs/"dashboard.stdout.log"),
             "StandardErrorPath":str(logs/"dashboard.stderr.log"),
         },fmt=plistlib.FMT_XML,sort_keys=True)
-        return {"manager":"launchd","label":label,"unit":label,"path":path,"content":content,"profile":str(profile_root),"data_dir":str(selected_data)}
+        return {"manager":"launchd","label":label,"unit":label,"path":path,"content":content,"host":host,"port":SERVICE_PORT,"url":_service_url(host),"profile":str(profile_root),"data_dir":str(selected_data)}
     unit=f"gympilot-dashboard-{identity}.service"; path=user_home/".config"/"systemd"/"user"/unit
     exec_start=" ".join(_systemd_quote(value) for value in arguments)
     environment_lines="".join(f"Environment={_systemd_quote(f'{key}={value}')}\n" for key,value in environment.items())
@@ -1115,7 +1135,7 @@ def dashboard_service_definition(system_name=None,user_home=None,executable=None
         f"StandardOutput={stdout_target}\nStandardError={stderr_target}\n\n"
         "[Install]\nWantedBy=default.target\n"
     )
-    return {"manager":"systemd","label":unit,"unit":unit,"path":path,"content":content,"profile":str(profile_root),"data_dir":str(selected_data)}
+    return {"manager":"systemd","label":unit,"unit":unit,"path":path,"content":content,"host":host,"port":SERVICE_PORT,"url":_service_url(host),"profile":str(profile_root),"data_dir":str(selected_data)}
 
 
 def _service_parent_descriptor(path: Path,create=False):
@@ -1166,6 +1186,56 @@ def _service_definition_is_regular(path: Path) -> bool:
     finally: os.close(descriptor)
 
 
+def _read_service_definition(path: Path,max_bytes=131072) -> bytes:
+    parent_fd=_service_parent_descriptor(path)
+    if parent_fd is None: raise ValueError("dashboard service is not installed")
+    descriptor=-1
+    try:
+        descriptor=os.open(path.name,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0),dir_fd=parent_fd)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode): raise ValueError("service definition must be a regular file")
+        chunks=[]; remaining=max_bytes+1
+        while remaining:
+            chunk=os.read(descriptor,min(65536,remaining))
+            if not chunk: break
+            chunks.append(chunk); remaining-=len(chunk)
+        payload=b"".join(chunks)
+        if len(payload)>max_bytes: raise ValueError("service definition is too large")
+        return payload
+    except OSError as error:
+        if error.errno in {errno.ELOOP,errno.ENOTDIR}: raise ValueError("service definition must not be a symlink") from error
+        raise
+    finally:
+        if descriptor >= 0: os.close(descriptor)
+        os.close(parent_fd)
+
+
+def _installed_service_endpoint(definition):
+    payload=_read_service_definition(definition["path"])
+    if definition["manager"]=="launchd":
+        try: document=plistlib.loads(payload)
+        except Exception as error: raise ValueError("installed launchd service definition is invalid") from error
+        arguments=document.get("ProgramArguments") if isinstance(document,dict) else None
+        if (not isinstance(arguments,list) or len(arguments)!=7 or any(not isinstance(value,str) for value in arguments)
+                or arguments[2]!="server" or arguments[3]!="--host" or arguments[5]!="--port"):
+            raise ValueError("installed launchd service arguments are invalid")
+        host=arguments[4]; port_text=arguments[6]
+    else:
+        try: content=payload.decode("utf-8")
+        except UnicodeDecodeError as error: raise ValueError("installed systemd service definition is invalid") from error
+        exec_lines=re.findall(r'(?m)^ExecStart=(.*)$',content)
+        quoted_argument=r'"(?:[^"\\]|\\.)*"'
+        pattern=rf'{quoted_argument} {quoted_argument} "server" "--host" "([^"\\\r\n]+)" "--port" "([0-9]+)"'
+        match=re.fullmatch(pattern,exec_lines[0]) if len(exec_lines)==1 else None
+        if match is None: raise ValueError("installed systemd service endpoint is invalid")
+        host,port_text=match.groups()
+        host=host.replace("%%","%")
+    host=_service_host(host)
+    try: port=int(port_text)
+    except (TypeError,ValueError) as error: raise ValueError("installed service port is invalid") from error
+    if port!=SERVICE_PORT: raise ValueError(f"installed service port must be {SERVICE_PORT}")
+    return host,port
+
+
 def _unlink_service_definition(path: Path) -> None:
     descriptor=_service_parent_descriptor(path)
     if descriptor is None: return
@@ -1198,9 +1268,11 @@ def _write_service_definition(path: Path,content) -> None:
         os.close(parent_fd)
 
 
-def dashboard_health(timeout=1,opener=None) -> bool:
+def dashboard_health(timeout=1,opener=None,host=None,port=None) -> bool:
+    host=_service_host(SERVICE_HOST if host is None else host)
+    port=SERVICE_PORT if port is None else port
     opener=opener or build_opener(ProxyHandler({}))
-    request=Request(f"http://{SERVICE_HOST}:{SERVICE_PORT}/api/health",headers={"Accept":"application/json"})
+    request=Request(f"{_service_url(host,port)}/api/health",headers={"Accept":"application/json"})
     try:
         with opener.open(request,timeout=timeout) as response:
             if response.status!=200: return False
@@ -1216,10 +1288,16 @@ def dashboard_health(timeout=1,opener=None) -> bool:
     except (OSError,ValueError,json.JSONDecodeError): return False
 
 
-def manage_dashboard_service(action,system_name=None,user_home=None,executable=None,runner=subprocess.run,health_checker=dashboard_health,health_timeout=5):
+def manage_dashboard_service(action,system_name=None,user_home=None,executable=None,runner=subprocess.run,health_checker=None,health_timeout=5,host=None):
     if action not in {"install","restart","status","uninstall"}: raise ValueError("service action must be install, restart, status, or uninstall")
-    definition=dashboard_service_definition(system_name,user_home,executable); path=definition["path"]
+    definition=dashboard_service_definition(system_name,user_home,executable,host=host); path=definition["path"]
     _validate_service_parent(path)
+    if host is None and _service_definition_is_regular(path):
+        installed_host,installed_port=_installed_service_endpoint(definition)
+        definition=dashboard_service_definition(system_name,user_home,executable,host=installed_host)
+        if definition["port"]!=installed_port: raise ValueError("installed service endpoint is inconsistent")
+    if health_checker is None:
+        health_checker=lambda: dashboard_health(host=definition["host"],port=definition["port"])
     private_directory(_service_data_root()); private_directory(_service_data_root()/"logs")
     def run(command,check=True,env=None):
         if env is None and command[:2]==["systemctl","--user"]: env=systemd_env
@@ -1340,11 +1418,13 @@ def manage_dashboard_service(action,system_name=None,user_home=None,executable=N
             detail=(stopped.stderr or stopped.stdout or "service remained active").strip()
             raise OSError(f"dashboard health failed and cleanup failed: {detail}")
         raise ValueError(f"dashboard service failed its health check; inspect {definition['data_dir']}/logs")
-    return {"ok":True,"action":action,"manager":definition["manager"],"unit":definition["unit"],"path":str(path),"installed":_service_definition_is_regular(path),"running":running,"healthy":healthy,"url":f"http://{SERVICE_HOST}:{SERVICE_PORT}","profile":definition["profile"],"data_dir":definition["data_dir"]}
+    return {"ok":True,"action":action,"manager":definition["manager"],"unit":definition["unit"],"path":str(path),"installed":_service_definition_is_regular(path),"running":running,"healthy":healthy,"url":definition["url"],"profile":definition["profile"],"data_dir":definition["data_dir"]}
 
 
 def validate_arguments(args) -> None:
     if sys.version_info < (3,11): raise ValueError("GymPilot requires Python 3.11 or newer")
+    if getattr(args,"command",None)=="service" and getattr(args,"action",None)=="install" and getattr(args,"host",None) is not None:
+        _service_host(args.host)
     integer_limits={
         "id":(1,SQLITE_INT_MAX),"routine":(1,SQLITE_INT_MAX),"exercise":(1,SQLITE_INT_MAX),
         "session":(1,SQLITE_INT_MAX),"equipment":(1,SQLITE_INT_MAX),"sets":(1,MAX_PLANNED_SETS),
@@ -1369,7 +1449,7 @@ def validate_arguments(args) -> None:
 def command(args):
     validate_arguments(args)
     ensure()
-    if args.command=="service": return manage_dashboard_service(args.action)
+    if args.command=="service": return manage_dashboard_service(args.action,host=getattr(args,"host",None))
     if args.command=="init": return initialize()
     if args.command=="status":
         with connect() as con: counts={t:con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("routines","exercises","equipment_aliases","sessions","workout_sets")}
@@ -1664,7 +1744,8 @@ def parser():
     for name in ("export","backup"): sub.add_parser(name)
     sec=sub.add_parser("security"); secs=sec.add_subparsers(dest="action",required=True); secs.add_parser("enable"); secs.add_parser("disable")
     svc=sub.add_parser("service"); svcs=svc.add_subparsers(dest="action",required=True)
-    for action in ("install","restart","status","uninstall"):
+    install=svcs.add_parser("install"); install.add_argument("--host")
+    for action in ("restart","status","uninstall"):
         svcs.add_parser(action)
     srv=sub.add_parser("server"); srv.add_argument("--host",default="127.0.0.1"); srv.add_argument("--port",type=safe_int,default=8765)
     return p
