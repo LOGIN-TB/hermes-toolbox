@@ -712,7 +712,7 @@ class GymPilotTest(unittest.TestCase):
         )
         plist = plistlib.loads(mac["content"])
         self.assertTrue(plist["Label"].startswith("de.login.gympilot.dashboard."))
-        self.assertEqual(plist["ProgramArguments"][:2], ["/usr/bin/python3", str(CLI)])
+        self.assertEqual(plist["ProgramArguments"][:2], [str(Path("/usr/bin/python3").resolve()), str(CLI)])
         self.assertEqual(plist["ProgramArguments"][-4:], ["--host", "127.0.0.1", "--port", "8765"])
         self.assertEqual(plist["EnvironmentVariables"]["HERMES_HOME"], str(self.home.resolve()))
         self.assertTrue(plist["RunAtLoad"])
