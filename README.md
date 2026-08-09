@@ -15,7 +15,8 @@ GymPilot ist ein lokaler Trainingstracker mit mobiler Weboberfläche und PWA-Dat
 - dauerhaft editierbares Geräte-/Studioprofil
 - JSON-Ausgabe für Hermes und lesbare Terminalausgabe
 - mobile Oberfläche; als PWA installierbar, wenn der Browser einen sicheren Kontext bereitstellt
-- Standardbindung an `127.0.0.1`; bewusste Freigabe für eine konkrete LAN- oder VPN-Adresse
+- persistenter, profilbezogener Dashboard-Service über `launchd` (macOS) oder `systemd --user` (Linux), unabhängig vom Hermes-Gateway
+- persistenter Service fest und sicher an `127.0.0.1:8765`; abweichende Bindungen nur beim bewusst gestarteten Vordergrundserver
 - optionaler Passwortschutz mit gesalzenem Hash, zufälligen Sitzungscookies und begrenzten Loginversuchen
 
 ## Voraussetzungen
@@ -47,24 +48,37 @@ Wurde GymPilot aus einem bereits laufenden Telegram-/Gateway-Chat installiert, m
 
 Ein Aufruf von `/gym` ohne Unterbefehl ist der stabile Startpunkt. GymPilot liest dafür den lokalen Zustand über `gympilot.py --json home`: Ohne Plan führt er zu `/gym setup`, mit heutiger Routine zeigt er das Training, ohne heutige Routine verweist er auf den Plan, und bei einer laufenden Einheit setzt er diese auch nach einer externen Plandeaktivierung fort. Der erste Aufruf initialisiert bei Bedarf das profilbezogene Datenverzeichnis und die SQLite-Datenbank. Damit ist ein bloßes Reagieren des Sprachmodells auf den Text `/gym` nicht mehr mit einer erfolgreichen Skillregistrierung zu verwechseln.
 
+Beim ersten `/gym`-Aufruf sollte der persistente Dashboard-Service angeboten und nach Zustimmung einmalig installiert werden. Alternativ kann dies im Terminal erfolgen, nachdem der Pfad zur installierten `gympilot.py` ermittelt wurde:
+
+```bash
+python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service install
+python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service status
+```
+
+Der Service startet das lokale Dashboard unabhängig vom Gateway. Ein `/restart` des Hermes-Gateways beendet die Weboberfläche deshalb nicht mehr. Ein echter Dashboard-Absturz wird beim nächsten `/gym`-Status erkannt und kontrolliert über `service restart` behoben; der Service erzeugt bewusst keine unbegrenzte Crash-Schleife.
+
+Da der persistente Service fest an `127.0.0.1:8765` gebunden ist, kann pro Benutzer immer nur ein GymPilot-Profil gleichzeitig laufen. Unter Linux gehört der Dienst zum `systemd --user`-Manager und läuft ohne interaktive Anmeldung nur weiter, wenn der Administrator für den Benutzer bewusst Linger aktiviert hat.
+
 ### Aktualisieren
 
 ```bash
 hermes skills check
 hermes skills update
+python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service install
 ```
 
-Nach einem Update aus einem laufenden Gateway-Chat ebenfalls `/reload-skills` senden; falls der Befehl danach noch nicht verfügbar ist, `/restart` verwenden.
+`service install` ist nach jedem Skill-Update erforderlich: Es ersetzt die Service-Definition und startet das Dashboard mit dem aktualisierten Skillcode neu. Zusätzlich enthält der Health-Contract eine beim Prozessstart fixierte Code-ID, sodass ein alter, noch laufender Prozess nicht als aktuell gesund gilt. Nach einem Update aus einem laufenden Gateway-Chat ebenfalls `/reload-skills` senden; falls der Befehl danach noch nicht verfügbar ist, `/restart` verwenden.
 
 Installierte Dateien nicht von Hand bearbeiten. Eine Aktualisierung ersetzt den Skillcode und seine Webdateien. Profil, Trainingsdaten, Backups und Exporte liegen außerhalb des Skillverzeichnisses und bleiben erhalten.
 
 ### Deinstallieren
 
 ```bash
+python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service uninstall
 hermes skills uninstall gym
 ```
 
-Der Befehl entfernt den Skill, nicht die persönlichen Daten unter `${HERMES_HOME:-~/.hermes}/gympilot`. Vor einer endgültigen manuellen Löschung dieses Verzeichnisses sollte über `/gym backup` eine Sicherung erstellt werden.
+Der Service muss zuerst entfernt werden, damit keine Service-Definition auf eine anschließend gelöschte CLI verweist. `hermes skills uninstall` entfernt den Skill, nicht die persönlichen Daten unter `${HERMES_HOME:-~/.hermes}/gympilot`. Vor einer endgültigen manuellen Löschung dieses Verzeichnisses sollte über `/gym backup` eine Sicherung erstellt werden.
 
 ## Direkter Start ohne Hermes
 
@@ -75,7 +89,7 @@ export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 python3 skills/gym/scripts/gympilot.py init
 python3 skills/gym/scripts/gympilot.py routine add "Ganzkörper" --weekday 1 --weekday 4
 python3 skills/gym/scripts/gympilot.py exercise add 1 "Kniebeuge" --sets 3 --min-reps 5 --max-reps 8
-python3 skills/gym/scripts/gympilot.py server
+python3 skills/gym/scripts/gympilot.py --json service install
 ```
 
 Die Web-App läuft anschließend unter <http://127.0.0.1:8765>. Für maschinenlesbare Ausgaben steht `--json` direkt vor dem jeweiligen Befehl.

@@ -1,7 +1,7 @@
 ---
 name: gym
 description: Lokale Trainingspläne importieren oder manuell pflegen und Training protokollieren.
-version: 0.1.0-alpha.4
+version: 0.1.0-alpha.5
 author: LOGIN-TB contributors
 license: MIT
 platforms: [linux, macos]
@@ -27,6 +27,7 @@ Der installierte Skillname `gym` ist der dynamische Hermes-Befehl `/gym`. Wird `
 
 ```bash
 python3 "$GYM_CLI" --json home
+python3 "$GYM_CLI" --json service status
 ```
 
 Der erste Aufruf initialisiert bei Bedarf das profilbezogene GymPilot-Datenverzeichnis und die SQLite-Datenbank.
@@ -35,6 +36,16 @@ Der erste Aufruf initialisiert bei Bedarf das profilbezogene GymPilot-Datenverze
 - `ready`: die heutige Routine aus `today` zusammenfassen und `/gym today`, `/gym plan` und `/gym status` anbieten.
 - `no_training_today`: erklären, dass für heute keine Routine geplant ist, und `/gym plan` als primäre Aktion anbieten; keine heutige Routine erfinden.
 - `training`: die laufende Einheit aus `today.active_session` fortsetzen und die bereits erfassten Sätze ausgeben.
+
+Den Dashboard-Service bei jedem `/gym`-Einstieg über `service status` prüfen. Ist er installiert, aber nicht `running` oder nicht `healthy`, `service restart` ausführen und den Status erneut prüfen. Ist er noch nicht installiert, die einmalige persistente Installation anbieten und erst nach Zustimmung ausführen:
+
+```bash
+python3 "$GYM_CLI" --json service install
+```
+
+Der profilbezogene Benutzer-Service läuft fest auf `127.0.0.1:8765`, auf macOS über `launchd` und unter Linux über `systemd --user` unabhängig vom Hermes-Gateway. Ein Gateway-Neustart darf das Dashboard danach nicht mehr beenden. Ein echter Dashboard-Absturz wird beim nächsten `/gym`-Status kontrolliert repariert; es gibt bewusst keine unbegrenzte Crash-Schleife. Abweichende Bindungen sind ausschließlich beim expliziten Vordergrundserver zulässig. `service uninstall` muss vor einer endgültigen Skill-Deinstallation ausgeführt werden, weil die Service-Definition auf die installierte GymPilot-CLI verweist.
+
+Nach jeder GymPilot-Skill-Aktualisierung `service install` erneut ausführen. Das ersetzt die Definition und startet den Dienst mit dem aktuellen Code neu; die Health-Code-ID verhindert zusätzlich, dass ein alter Prozess als aktuell gesund gilt. Wegen des festen Ports kann pro Benutzer nur ein GymPilot-Profil gleichzeitig laufen. Unter Linux endet der `systemd --user`-Manager normalerweise mit der Benutzersitzung; Betrieb ohne Anmeldung setzt eine bewusst administrierte Linger-Konfiguration voraus.
 
 Nach Installation oder Aktualisierung in einem laufenden Gateway `/reload-skills` ausführen. Danach muss `/gym` über `/commands` auffindbar und manuell aufrufbar sein. Das sichtbare Telegram-Befehlsmenü wird erst beim Gateway-Start über die Bot API registriert und ist kapazitätsbegrenzt; deshalb anschließend `/restart` ausführen und die Sichtbarkeit separat prüfen. Fehlt `/gym` trotz erfolgreichem manuellem Aufruf weiterhin im Menü, ist das konfigurierte Menülimit eine mögliche Ursache. Zusätzlich den erfolgreichen Gateway-Neustart und in den Gateway-Logs die Bot-API-Registrierung `set_my_commands` für den betroffenen Telegram-Scope prüfen. Einsatzbereitschaft erst bestätigen, wenn der echte Aufruf `/gym` den oben beschriebenen `home`-Einstieg ausführt; Menü-Sichtbarkeit ist eine zusätzliche, konfigurationsabhängige UX-Prüfung.
 
@@ -90,7 +101,11 @@ Vor jedem Schreibvorgang Übung, Gewicht, Einheit und Wiederholungen eindeutig b
 
 ## Dashboard, Export, Backup und Sicherheit
 
-- Dashboard lokal: `python3 "$GYM_CLI" server --host 127.0.0.1 --port 8765`
+- Dashboard persistent installieren: `python3 "$GYM_CLI" --json service install`
+- Dashboard prüfen: `python3 "$GYM_CLI" --json service status`
+- Dashboard neu starten: `python3 "$GYM_CLI" --json service restart`
+- Dashboard-Service entfernen: `python3 "$GYM_CLI" --json service uninstall`
+- Nur zur Diagnose im Vordergrund: `python3 "$GYM_CLI" server --host 127.0.0.1 --port 8765`
 - Export: `... --json export`
 - Backup: `... --json backup`
 - Status: `... --json status`
