@@ -6,6 +6,7 @@ import importlib.util
 import csv
 import json
 import os
+import plistlib
 from datetime import date
 from pathlib import Path
 import socket
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -699,6 +701,445 @@ class GymPilotTest(unittest.TestCase):
         self.assertTrue(gym.verify_password("correct horse", encoded))
         self.assertFalse(gym.verify_password("wrong", encoded))
 
+    def test_dashboard_service_definitions_are_profile_scoped_and_gateway_independent(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+
+        mac = gym.dashboard_service_definition(
+            system_name="Darwin",
+            user_home=Path(self.tmp.name) / "user",
+            executable=Path("/usr/bin/python3"),
+        )
+        plist = plistlib.loads(mac["content"])
+        self.assertTrue(plist["Label"].startswith("de.login.gympilot.dashboard."))
+        self.assertEqual(plist["ProgramArguments"][:2], ["/usr/bin/python3", str(CLI)])
+        self.assertEqual(plist["ProgramArguments"][-4:], ["--host", "127.0.0.1", "--port", "8765"])
+        self.assertEqual(plist["EnvironmentVariables"]["HERMES_HOME"], str(self.home.resolve()))
+        self.assertTrue(plist["RunAtLoad"])
+        self.assertNotIn("KeepAlive", plist)
+        self.assertIn("Library/LaunchAgents", str(mac["path"]))
+
+        linux = gym.dashboard_service_definition(
+            system_name="Linux",
+            user_home=Path(self.tmp.name) / "user",
+            executable=Path("/usr/bin/python3"),
+        )
+        self.assertIn("Restart=no", linux["content"])
+        self.assertIn("WantedBy=default.target", linux["content"])
+        self.assertIn(f'Environment="HERMES_HOME={self.home.resolve()}"', linux["content"])
+        self.assertIn(".config/systemd/user/gympilot-dashboard-", str(linux["path"]))
+
+        override = Path(self.tmp.name) / "data-%t"
+        os.environ["GYMPILOT_DATA_DIR"] = str(override)
+        overridden = gym.dashboard_service_definition(
+            system_name="Linux",
+            user_home=Path(self.tmp.name) / "user",
+            executable=Path("/usr/bin/python3"),
+        )
+        self.assertNotEqual(linux["unit"], overridden["unit"])
+        self.assertIn("GYMPILOT_DATA_DIR=", overridden["content"])
+        self.assertIn("data-%%t", overridden["content"])
+        os.environ.pop("GYMPILOT_DATA_DIR")
+
+        os.environ["HERMES_HOME"] = str(Path(self.tmp.name) / "other-profile")
+        other = gym.dashboard_service_definition(
+            system_name="Darwin",
+            user_home=Path(self.tmp.name) / "user",
+            executable=Path("/usr/bin/python3"),
+        )
+        self.assertNotEqual(mac["label"], other["label"])
+        self.assertNotEqual(mac["path"], other["path"])
+
+    def test_dashboard_health_accepts_the_real_health_contract(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        gym.initialize()
+        server = gym.make_server("127.0.0.1", 0)
+        gym.SERVICE_PORT = server.server_port
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            self.assertTrue(gym.dashboard_health())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(5)
+
+    def test_service_rejects_control_characters_and_health_is_bounded(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        os.environ["GYMPILOT_DATA_DIR"] = str(Path(self.tmp.name) / "bad\npath")
+        with self.assertRaisesRegex(ValueError, "control"):
+            gym.dashboard_service_definition(system_name="Linux")
+        os.environ.pop("GYMPILOT_DATA_DIR")
+
+        class Response:
+            status = 200
+            headers = {"Content-Type": "application/json; charset=utf-8"}
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self, size=-1): return b"x" * 4097
+        class Opener:
+            def open(self, *_args, **_kwargs): return Response()
+        self.assertFalse(gym.dashboard_health(opener=Opener()))
+
+        class WrongInstanceResponse(Response):
+            def read(self, size=-1):
+                return json.dumps({"status": "ok", "schema_version": gym.SCHEMA_VERSION,
+                                   "instance_id": "different"}).encode()
+        class WrongInstanceOpener:
+            def open(self, *_args, **_kwargs): return WrongInstanceResponse()
+        self.assertFalse(gym.dashboard_health(opener=WrongInstanceOpener()))
+
+        class StaleCodeResponse(Response):
+            def read(self, size=-1):
+                return json.dumps({"status": "ok", "schema_version": gym.SCHEMA_VERSION,
+                                   "instance_id": gym.dashboard_instance_id(),
+                                   "code_id": "obsolete"}).encode()
+        class StaleCodeOpener:
+            def open(self, *_args, **_kwargs): return StaleCodeResponse()
+        self.assertFalse(gym.dashboard_health(opener=StaleCodeOpener()))
+
+    def test_service_parent_symlinks_are_rejected_without_mutation(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        user_home = Path(self.tmp.name) / "user"
+        redirected = Path(self.tmp.name) / "redirected"
+        redirected.mkdir()
+        user_home.mkdir()
+        (user_home / ".config").symlink_to(redirected, target_is_directory=True)
+        victim = redirected / "systemd" / "user" / gym.dashboard_service_definition(
+            "Linux", user_home, Path("/usr/bin/python3"))["unit"]
+        victim.parent.mkdir(parents=True)
+        victim.write_text("do not delete")
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            gym.manage_dashboard_service(
+                "uninstall", system_name="Linux", user_home=user_home,
+                executable=Path("/usr/bin/python3"),
+                runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("manager must not run")),
+            )
+        self.assertEqual(victim.read_text(), "do not delete")
+
+    def test_service_definition_write_and_unlink_hold_parent_across_ancestor_swap(self):
+        gym = load_module()
+        root = Path(self.tmp.name).resolve() / "race-user"
+        parent = root / ".config" / "systemd" / "user"
+        parent.mkdir(parents=True)
+        redirected = Path(self.tmp.name) / "redirected-race" / "user"
+        redirected.mkdir(parents=True)
+        target = parent / "gympilot.service"
+        real_descriptor = gym.directory_descriptor
+        state = {"swapped": False}
+
+        def swapping_descriptor(path, **kwargs):
+            descriptor = real_descriptor(path, **kwargs)
+            if Path(path) == parent and not state["swapped"]:
+                state["swapped"] = True
+                original = root / ".config" / "systemd.original"
+                (root / ".config" / "systemd").rename(original)
+                (root / ".config" / "systemd").symlink_to(redirected.parent, target_is_directory=True)
+            return descriptor
+
+        gym.directory_descriptor = swapping_descriptor
+        gym._write_service_definition(target, "safe")
+        original_target = root / ".config" / "systemd.original" / "user" / target.name
+        self.assertEqual(original_target.read_text(), "safe")
+        self.assertFalse((redirected / target.name).exists())
+
+        state["swapped"] = False
+        (root / ".config" / "systemd").unlink()
+        (root / ".config" / "systemd.original").rename(root / ".config" / "systemd")
+        (redirected / target.name).write_text("victim")
+        gym._unlink_service_definition(target)
+        self.assertFalse((root / ".config" / "systemd.original" / "user" / target.name).exists())
+        self.assertEqual((redirected / target.name).read_text(), "victim")
+
+    def test_symlinked_user_home_is_rejected_before_service_definition_resolution(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        redirected = Path(self.tmp.name).resolve() / "redirected-home"
+        redirected.mkdir()
+        linked_home = Path(self.tmp.name).resolve() / "linked-home"
+        linked_home.symlink_to(redirected, target_is_directory=True)
+        manager_called = []
+        def runner(command, **_kwargs):
+            manager_called.append(command)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        for action in ("install", "uninstall"):
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                gym.manage_dashboard_service(
+                    action, system_name="Linux", user_home=linked_home,
+                    executable=Path("/usr/bin/python3"), runner=runner,
+                )
+        self.assertEqual(manager_called, [])
+        self.assertFalse((redirected / ".config" / "systemd" / "user").exists())
+
+    def test_dashboard_service_install_restart_status_and_uninstall_use_user_manager(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        user_home = Path(self.tmp.name) / "user"
+        calls = []
+        state = {"active": False}
+
+        def runner(command, **kwargs):
+            calls.append((command, kwargs))
+            operation = command[2] if command[:2] == ["systemctl", "--user"] and len(command) > 2 else ""
+            if operation in {"restart", "start"}: state["active"] = True
+            if operation in {"disable", "stop"}: state["active"] = False
+            if operation == "is-active":
+                return SimpleNamespace(returncode=0 if state["active"] else 3, stdout="active\n" if state["active"] else "inactive\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        service_kwargs = {
+            "system_name": "Linux", "user_home": user_home,
+            "executable": Path("/usr/bin/python3"), "runner": runner,
+            "health_checker": lambda: True,
+        }
+        installed = gym.manage_dashboard_service("install", **service_kwargs)
+        service_path = Path(installed["path"])
+        self.assertTrue(service_path.is_file())
+        self.assertEqual(stat.S_IMODE(service_path.stat().st_mode), 0o600)
+        self.assertTrue(installed["healthy"])
+        self.assertIn(["systemctl", "--user", "daemon-reload"], [call[0] for call in calls])
+        self.assertTrue(any(call[0][:3] == ["systemctl", "--user", "enable"] for call in calls))
+
+        restarted = gym.manage_dashboard_service("restart", **service_kwargs)
+        self.assertTrue(restarted["installed"])
+        self.assertTrue(restarted["healthy"])
+        self.assertTrue(any(call[0][:3] == ["systemctl", "--user", "restart"] for call in calls))
+
+        status = gym.manage_dashboard_service("status", **service_kwargs)
+        self.assertTrue(status["installed"])
+        self.assertTrue(status["running"])
+
+        removed = gym.manage_dashboard_service("uninstall", **service_kwargs)
+        self.assertFalse(service_path.exists())
+        self.assertFalse(removed["installed"])
+        self.assertTrue(any(call[0][:3] == ["systemctl", "--user", "disable"] for call in calls))
+
+    def test_service_manager_failures_are_fail_closed_and_linux_reinstall_restarts(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        user_home = Path(self.tmp.name) / "user"
+        calls = []
+        fail_disable = False
+        state = {"active": False}
+
+        def runner(command, **_kwargs):
+            calls.append(command)
+            operation = command[2] if command[:2] == ["systemctl", "--user"] and len(command) > 2 else ""
+            if fail_disable and operation == "disable":
+                return SimpleNamespace(returncode=1, stdout="", stderr="cannot stop")
+            if operation in {"restart", "start"}: state["active"] = True
+            if operation in {"disable", "stop"}: state["active"] = False
+            if operation == "is-active":
+                return SimpleNamespace(returncode=0 if state["active"] else 3, stdout="", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        kwargs = {"system_name": "Linux", "user_home": user_home,
+                  "executable": Path("/usr/bin/python3"), "runner": runner,
+                  "health_checker": lambda: True}
+        installed = gym.manage_dashboard_service("install", **kwargs)
+        self.assertTrue(any(call[:3] == ["systemctl", "--user", "restart"] for call in calls))
+        calls.clear()
+        gym.manage_dashboard_service("install", **kwargs)
+        self.assertTrue(any(call[:3] == ["systemctl", "--user", "restart"] for call in calls))
+
+        fail_disable = True
+        with self.assertRaisesRegex(OSError, "cannot stop"):
+            gym.manage_dashboard_service("uninstall", **kwargs)
+        self.assertTrue(Path(installed["path"]).is_file())
+
+        fail_disable = False
+        gym.manage_dashboard_service("uninstall", **kwargs)
+
+        service_path = Path(installed["path"])
+        service_path.symlink_to(service_path.parent / "missing-unit")
+        gym.manage_dashboard_service("uninstall", **kwargs)
+        self.assertFalse(os.path.lexists(service_path))
+
+    def test_launchd_loaded_but_waiting_is_not_reported_as_running(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        def runner(command, **_kwargs):
+            if command[:2] == ["launchctl", "print"]:
+                return SimpleNamespace(returncode=0, stdout="state = waiting\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        result = gym.manage_dashboard_service(
+            "status", system_name="Darwin", user_home=Path(self.tmp.name) / "user",
+            executable=Path("/usr/bin/python3"), runner=runner,
+            health_checker=lambda: (_ for _ in ()).throw(AssertionError("health must not run")),
+        )
+        self.assertFalse(result["running"])
+        self.assertFalse(result["healthy"])
+
+    def test_launchd_restart_reloads_definition_without_kickstart_kill(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        user_home = Path(self.tmp.name) / "user"
+        definition = gym.dashboard_service_definition("Darwin", user_home, Path("/usr/bin/python3"))
+        gym._write_service_definition(definition["path"], definition["content"])
+        state = {"loaded": True, "waiting_checks": 0}
+        calls = []
+        def runner(command, **_kwargs):
+            calls.append(command)
+            operation = command[1] if command and command[0] == "launchctl" and len(command) > 1 else ""
+            if operation == "bootout": state["loaded"] = False
+            if operation == "bootstrap":
+                state["loaded"] = True
+                state["waiting_checks"] = 1
+            if operation == "print":
+                if state["loaded"] and state["waiting_checks"]:
+                    state["waiting_checks"] -= 1
+                    return SimpleNamespace(returncode=0, stdout="state = waiting\n", stderr="")
+                return SimpleNamespace(returncode=0 if state["loaded"] else 3,
+                                       stdout="state = running\n" if state["loaded"] else "", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        result = gym.manage_dashboard_service(
+            "restart", system_name="Darwin", user_home=user_home,
+            executable=Path("/usr/bin/python3"), runner=runner,
+            health_checker=lambda: True,
+        )
+        self.assertTrue(result["running"])
+        self.assertTrue(any(call[:2] == ["launchctl", "bootout"] for call in calls))
+        self.assertTrue(any(call[:2] == ["launchctl", "bootstrap"] for call in calls))
+        self.assertFalse(any(call[:3] == ["launchctl", "kickstart", "-k"] for call in calls))
+
+    def test_unhealthy_install_stops_service_and_reports_failure(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        calls = []
+        state = {"active": False}
+        def runner(command, **_kwargs):
+            calls.append(command)
+            operation = command[2] if command[:2] == ["systemctl", "--user"] and len(command) > 2 else ""
+            if operation == "restart": state["active"] = True
+            if operation == "stop": state["active"] = False
+            if operation == "is-active": return SimpleNamespace(returncode=0 if state["active"] else 3, stdout="", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        with self.assertRaisesRegex(ValueError, "health"):
+            gym.manage_dashboard_service(
+                "install", system_name="Linux", user_home=Path(self.tmp.name) / "user",
+                executable=Path("/usr/bin/python3"), runner=runner,
+                health_checker=lambda: False, health_timeout=0,
+            )
+        self.assertTrue(any(call[:3] == ["systemctl", "--user", "stop"] for call in calls))
+
+    def test_failed_health_cleanup_reports_manager_failure_and_leaves_definition(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        state = {"active": False}
+        def runner(command, **_kwargs):
+            operation = command[2] if command[:2] == ["systemctl", "--user"] and len(command) > 2 else ""
+            if operation == "restart": state["active"] = True
+            if operation == "stop": return SimpleNamespace(returncode=1, stdout="", stderr="stop failed")
+            if operation == "is-active": return SimpleNamespace(returncode=0 if state["active"] else 3, stdout="", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        with self.assertRaisesRegex(OSError, "cleanup.*stop failed"):
+            gym.manage_dashboard_service(
+                "install", system_name="Linux", user_home=Path(self.tmp.name) / "user",
+                executable=Path("/usr/bin/python3"), runner=runner,
+                health_checker=lambda: False, health_timeout=0,
+            )
+        definition = gym.dashboard_service_definition("Linux", Path(self.tmp.name) / "user", Path("/usr/bin/python3"))
+        self.assertTrue(definition["path"].is_file())
+
+    def test_linux_uninstall_removes_broken_unit_symlink_when_unit_is_inactive(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        user_home = Path(self.tmp.name) / "user"
+        definition = gym.dashboard_service_definition("Linux", user_home, Path("/usr/bin/python3"))
+        definition["path"].parent.mkdir(parents=True)
+        definition["path"].symlink_to(definition["path"].parent / "missing")
+        def runner(command, **_kwargs):
+            operation = command[2] if command[:2] == ["systemctl", "--user"] and len(command) > 2 else ""
+            if operation == "disable": return SimpleNamespace(returncode=1, stdout="", stderr="unit not found")
+            if operation == "is-active": return SimpleNamespace(returncode=3, stdout="", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        result = gym.manage_dashboard_service(
+            "uninstall", system_name="Linux", user_home=user_home,
+            executable=Path("/usr/bin/python3"), runner=runner,
+        )
+        self.assertFalse(os.path.lexists(definition["path"]))
+        self.assertFalse(result["installed"])
+
+    def test_manager_status_errors_never_count_as_inactive(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        user_home = Path(self.tmp.name) / "user"
+        definition = gym.dashboard_service_definition("Linux", user_home, Path("/usr/bin/python3"))
+        definition["path"].parent.mkdir(parents=True)
+        definition["path"].symlink_to(definition["path"].parent / "missing")
+        def bus_error_runner(command, **_kwargs):
+            operation = command[2] if command[:2] == ["systemctl", "--user"] and len(command) > 2 else ""
+            if operation == "disable": return SimpleNamespace(returncode=1, stdout="", stderr="unit not found")
+            if operation == "is-active": return SimpleNamespace(returncode=1, stdout="", stderr="Failed to connect to bus")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        with self.assertRaisesRegex(OSError, "Failed to connect to bus"):
+            gym.manage_dashboard_service(
+                "uninstall", system_name="Linux", user_home=user_home,
+                executable=Path("/usr/bin/python3"), runner=bus_error_runner,
+            )
+        self.assertTrue(os.path.lexists(definition["path"]))
+
+        launch = gym.dashboard_service_definition("Darwin", user_home, Path("/usr/bin/python3"))
+        gym._write_service_definition(launch["path"], launch["content"])
+        def launch_error_runner(command, **_kwargs):
+            if command[:2] == ["launchctl", "print"]:
+                return SimpleNamespace(returncode=1, stdout="", stderr="Operation not permitted")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        with self.assertRaisesRegex(OSError, "Operation not permitted"):
+            gym.manage_dashboard_service(
+                "uninstall", system_name="Darwin", user_home=user_home,
+                executable=Path("/usr/bin/python3"), runner=launch_error_runner,
+            )
+        self.assertTrue(launch["path"].is_file())
+
+    def test_service_restart_rejects_final_definition_symlinks(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        user_home = Path(self.tmp.name).resolve() / "restart-user"
+        for system_name in ("Darwin", "Linux"):
+            definition = gym.dashboard_service_definition(system_name, user_home, Path("/usr/bin/python3"))
+            definition["path"].parent.mkdir(parents=True, exist_ok=True)
+            victim = Path(self.tmp.name).resolve() / f"{system_name}.victim"
+            victim.write_text("do not bootstrap")
+            definition["path"].symlink_to(victim)
+            calls = []
+            def runner(command, **_kwargs):
+                calls.append(command)
+                if command[:2] == ["launchctl", "print"]:
+                    return SimpleNamespace(returncode=0, stdout="state = running\n", stderr="")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            with self.assertRaisesRegex(ValueError, "not installed"):
+                gym.manage_dashboard_service(
+                    "restart", system_name=system_name, user_home=user_home,
+                    executable=Path("/usr/bin/python3"), runner=runner,
+                )
+            self.assertFalse(any("bootstrap" in command or "restart" in command for command in calls))
+            definition["path"].unlink()
+
+    def test_cleanup_status_bus_error_is_explicit_and_retains_definition(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        state = {"checks": 0}
+        def runner(command, **_kwargs):
+            operation = command[2] if command[:2] == ["systemctl", "--user"] and len(command) > 2 else ""
+            if operation == "is-active":
+                state["checks"] += 1
+                if state["checks"] == 1: return SimpleNamespace(returncode=0, stdout="", stderr="")
+                return SimpleNamespace(returncode=1, stdout="", stderr="Failed to connect to bus")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        user_home = Path(self.tmp.name) / "user"
+        with self.assertRaisesRegex(OSError, "cleanup status failed.*Failed to connect to bus"):
+            gym.manage_dashboard_service(
+                "install", system_name="Linux", user_home=user_home,
+                executable=Path("/usr/bin/python3"), runner=runner,
+                health_checker=lambda: False, health_timeout=0,
+            )
+        definition = gym.dashboard_service_definition("Linux", user_home, Path("/usr/bin/python3"))
+        self.assertTrue(definition["path"].is_file())
+
     def test_server_private_api_is_never_cached_and_web_assets_are_functional(self):
         gym = load_module()
         os.environ["HERMES_HOME"] = str(self.home)
@@ -1106,9 +1547,12 @@ class GymPilotTest(unittest.TestCase):
 
     def test_skill_declares_bare_gym_entrypoint_and_home_command(self):
         skill = (ROOT / "skills" / "gym" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("version: 0.1.0-alpha.4", skill)
+        self.assertIn("version: 0.1.0-alpha.5", skill)
         self.assertIn("## `/gym`: stabiler Einstieg", skill)
         self.assertIn('python3 "$GYM_CLI" --json home', skill)
+        self.assertIn('python3 "$GYM_CLI" --json service install', skill)
+        self.assertIn('python3 "$GYM_CLI" --json service status', skill)
+        self.assertIn("unabhängig vom Hermes-Gateway", skill)
         self.assertIn("Telegram-Befehlsmenü", skill)
         self.assertIn("mögliche Ursache", skill)
         self.assertIn("Gateway-Logs", skill)

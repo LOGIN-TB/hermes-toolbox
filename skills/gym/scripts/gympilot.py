@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import csv
 import getpass
 import hashlib
@@ -13,9 +14,12 @@ import json
 import math
 import mimetypes
 import os
+import platform
+import plistlib
 from pathlib import Path
 import re
 import secrets
+import subprocess
 import socket
 import sqlite3
 import stat
@@ -27,6 +31,7 @@ from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+from urllib.request import ProxyHandler, Request, build_opener
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -49,6 +54,10 @@ MAX_REPS = 100000
 SQLITE_INT_MAX = 9223372036854775807
 WEB_ROOT = Path(__file__).resolve().parent.parent / "assets" / "web"
 PROFILE_ONBOARDING_FIELDS = ("display_name", "locale", "units", "goal")
+SERVICE_HOST = "127.0.0.1"
+SERVICE_PORT = 8765
+MAX_HEALTH_RESPONSE = 4096
+SERVICE_CODE_ID = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
 
 
 def data_dir() -> Path:
@@ -978,7 +987,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/"):
             if parsed.path != "/api/health" and not self.authorized(): return self.send_json({"error":"authentication required"},401)
             try:
-                if parsed.path=="/api/health": return self.send_json({"status":"ok","schema_version":SCHEMA_VERSION,"auth_required":auth_enabled()})
+                if parsed.path=="/api/health": return self.send_json({"status":"ok","schema_version":SCHEMA_VERSION,"instance_id":dashboard_instance_id(),"code_id":SERVICE_CODE_ID,"auth_required":auth_enabled()})
                 if parsed.path=="/api/today":
                     query=parse_qs(parsed.query,keep_blank_values=True)
                     if not query: return self.send_json(today_data())
@@ -1044,6 +1053,265 @@ def make_server(host="127.0.0.1", port=8765):
     return server
 
 
+def _service_profile_root() -> Path:
+    root=Path(os.environ.get("HERMES_HOME") or "~/.hermes").expanduser().absolute()
+    reject_symlink_components(root)
+    return root.resolve(strict=False)
+
+
+def _service_data_root() -> Path:
+    return data_dir().resolve(strict=False)
+
+
+def _reject_service_control_characters(*values) -> None:
+    for value in values:
+        if any(ord(char)<32 or ord(char)==127 for char in str(value)):
+            raise ValueError("service paths must not contain control characters")
+
+
+def dashboard_instance_id() -> str:
+    profile_root=_service_profile_root(); selected_data=_service_data_root()
+    return hashlib.sha256(f"{profile_root}\0{selected_data}".encode()).hexdigest()[:16]
+
+
+def _systemd_quote(value) -> str:
+    _reject_service_control_characters(value)
+    return '"' + str(value).replace("%","%%").replace("\\","\\\\").replace('"','\\"') + '"'
+
+
+def dashboard_service_definition(system_name=None,user_home=None,executable=None):
+    system_name=system_name or platform.system()
+    if system_name not in {"Darwin","Linux"}: raise ValueError("persistent dashboard service is supported on macOS and Linux")
+    profile_root=_service_profile_root(); selected_data=_service_data_root()
+    identity=dashboard_instance_id()[:12]
+    raw_user_home=Path(user_home or Path.home()).expanduser().absolute()
+    reject_symlink_components(raw_user_home)
+    user_home=raw_user_home.resolve(strict=False)
+    executable=Path(executable or sys.executable).resolve(strict=False)
+    script=Path(__file__).resolve(); logs=selected_data/"logs"
+    _reject_service_control_characters(profile_root,selected_data,user_home,executable,script,logs)
+    arguments=[str(executable),str(script),"server","--host",SERVICE_HOST,"--port",str(SERVICE_PORT)]
+    environment={"HERMES_HOME":str(profile_root),"GYMPILOT_DATA_DIR":str(selected_data),"PYTHONDONTWRITEBYTECODE":"1"}
+    if system_name=="Darwin":
+        label=f"de.login.gympilot.dashboard.{identity}"
+        path=user_home/"Library"/"LaunchAgents"/f"{label}.plist"
+        content=plistlib.dumps({
+            "Label":label,"ProgramArguments":arguments,"EnvironmentVariables":environment,
+            "RunAtLoad":True,
+            "StandardOutPath":str(logs/"dashboard.stdout.log"),
+            "StandardErrorPath":str(logs/"dashboard.stderr.log"),
+        },fmt=plistlib.FMT_XML,sort_keys=True)
+        return {"manager":"launchd","label":label,"unit":label,"path":path,"content":content,"profile":str(profile_root),"data_dir":str(selected_data)}
+    unit=f"gympilot-dashboard-{identity}.service"; path=user_home/".config"/"systemd"/"user"/unit
+    exec_start=" ".join(_systemd_quote(value) for value in arguments)
+    environment_lines="".join(f"Environment={_systemd_quote(f'{key}={value}')}\n" for key,value in environment.items())
+    stdout_target=_systemd_quote(f"append:{logs / 'dashboard.stdout.log'}")
+    stderr_target=_systemd_quote(f"append:{logs / 'dashboard.stderr.log'}")
+    content=(
+        "[Unit]\nDescription=GymPilot local dashboard\nAfter=network.target\n\n"
+        f"[Service]\nType=simple\n{environment_lines}ExecStart={exec_start}\n"
+        "Restart=no\nNoNewPrivileges=true\nPrivateTmp=true\n"
+        f"StandardOutput={stdout_target}\nStandardError={stderr_target}\n\n"
+        "[Install]\nWantedBy=default.target\n"
+    )
+    return {"manager":"systemd","label":unit,"unit":unit,"path":path,"content":content,"profile":str(profile_root),"data_dir":str(selected_data)}
+
+
+def _service_parent_descriptor(path: Path,create=False):
+    try:
+        return directory_descriptor(path.parent,create=create)
+    except FileNotFoundError:
+        if create: raise
+        return None
+    except OSError as error:
+        if error.errno in {errno.ELOOP,errno.ENOTDIR}:
+            raise ValueError(f"symlink paths are not allowed for service definitions: {path.parent}") from error
+        raise
+
+
+def _validate_service_parent(path: Path) -> None:
+    descriptor=_service_parent_descriptor(path)
+    if descriptor is not None: os.close(descriptor)
+
+
+def _path_lexists(path: Path) -> bool:
+    descriptor=_service_parent_descriptor(path)
+    if descriptor is None: return False
+    try:
+        try: os.stat(path.name,dir_fd=descriptor,follow_symlinks=False); return True
+        except FileNotFoundError: return False
+    finally: os.close(descriptor)
+
+
+def _service_definition_is_broken_symlink(path: Path) -> bool:
+    descriptor=_service_parent_descriptor(path)
+    if descriptor is None: return False
+    try:
+        try: mode=os.stat(path.name,dir_fd=descriptor,follow_symlinks=False).st_mode
+        except FileNotFoundError: return False
+        if not stat.S_ISLNK(mode): return False
+        try: os.stat(path.name,dir_fd=descriptor,follow_symlinks=True); return False
+        except FileNotFoundError: return True
+    finally: os.close(descriptor)
+
+
+def _service_definition_is_regular(path: Path) -> bool:
+    descriptor=_service_parent_descriptor(path)
+    if descriptor is None: return False
+    try:
+        try: mode=os.stat(path.name,dir_fd=descriptor,follow_symlinks=False).st_mode
+        except FileNotFoundError: return False
+        return stat.S_ISREG(mode)
+    finally: os.close(descriptor)
+
+
+def _unlink_service_definition(path: Path) -> None:
+    descriptor=_service_parent_descriptor(path)
+    if descriptor is None: return
+    try:
+        try: os.unlink(path.name,dir_fd=descriptor)
+        except FileNotFoundError: pass
+    finally: os.close(descriptor)
+
+
+def _write_service_definition(path: Path,content) -> None:
+    parent_fd=_service_parent_descriptor(path,create=True)
+    temp_name=f".{path.name}.{secrets.token_hex(8)}"
+    flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0)
+    descriptor=-1
+    try:
+        try: target_mode=os.stat(path.name,dir_fd=parent_fd,follow_symlinks=False).st_mode
+        except FileNotFoundError: target_mode=None
+        if target_mode is not None and stat.S_ISLNK(target_mode): raise ValueError("service definition must not be a symlink")
+        descriptor=os.open(temp_name,flags,0o600,dir_fd=parent_fd)
+        payload=content if isinstance(content,bytes) else content.encode()
+        os.fchmod(descriptor,0o600)
+        with os.fdopen(descriptor,"wb",closefd=False) as handle:
+            handle.write(payload); handle.flush(); os.fsync(handle.fileno())
+        os.close(descriptor); descriptor=-1
+        os.replace(temp_name,path.name,src_dir_fd=parent_fd,dst_dir_fd=parent_fd)
+    finally:
+        if descriptor >= 0: os.close(descriptor)
+        try: os.unlink(temp_name,dir_fd=parent_fd)
+        except FileNotFoundError: pass
+        os.close(parent_fd)
+
+
+def dashboard_health(timeout=1,opener=None) -> bool:
+    opener=opener or build_opener(ProxyHandler({}))
+    request=Request(f"http://{SERVICE_HOST}:{SERVICE_PORT}/api/health",headers={"Accept":"application/json"})
+    try:
+        with opener.open(request,timeout=timeout) as response:
+            if response.status!=200: return False
+            content_type=(response.headers.get("Content-Type") or "").split(";",1)[0].strip().lower()
+            if content_type!="application/json": return False
+            body=response.read(MAX_HEALTH_RESPONSE+1)
+            if len(body)>MAX_HEALTH_RESPONSE: return False
+            payload=json.loads(body)
+            return (isinstance(payload,dict) and payload.get("status")=="ok"
+                    and payload.get("schema_version")==SCHEMA_VERSION
+                    and payload.get("instance_id")==dashboard_instance_id()
+                    and payload.get("code_id")==SERVICE_CODE_ID)
+    except (OSError,ValueError,json.JSONDecodeError): return False
+
+
+def manage_dashboard_service(action,system_name=None,user_home=None,executable=None,runner=subprocess.run,health_checker=dashboard_health,health_timeout=5):
+    if action not in {"install","restart","status","uninstall"}: raise ValueError("service action must be install, restart, status, or uninstall")
+    definition=dashboard_service_definition(system_name,user_home,executable); path=definition["path"]
+    _validate_service_parent(path)
+    private_directory(_service_data_root()); private_directory(_service_data_root()/"logs")
+    def run(command,check=True):
+        result=runner(command,text=True,capture_output=True)
+        if check and result.returncode:
+            message=(result.stderr or result.stdout or "service manager command failed").strip()
+            raise OSError(message)
+        return result
+    def launch_status(target):
+        result=run(["launchctl","print",target],check=False)
+        if result.returncode==0:
+            running=re.search(r"(?m)^\s*state = running\s*$",result.stdout or "") is not None
+            return True,running
+        message=(result.stderr or result.stdout or "launchctl print failed").strip()
+        if re.search(r"could not find service|service .*not found|could not find specified service",message,re.IGNORECASE):
+            return False,False
+        raise OSError(message)
+
+    def systemd_running(unit):
+        result=run(["systemctl","--user","is-active","--quiet",unit],check=False)
+        if result.returncode==0: return True
+        if result.returncode in {3,4}: return False
+        message=(result.stderr or result.stdout or "systemctl is-active failed").strip()
+        raise OSError(message)
+    if definition["manager"]=="launchd":
+        domain=f"gui/{os.getuid()}"; target=f"{domain}/{definition['label']}"
+        loaded,_=launch_status(target)
+        if action=="install":
+            if loaded: run(["launchctl","bootout",target])
+            _write_service_definition(path,definition["content"])
+            run(["launchctl","bootstrap",domain,str(path)]); run(["launchctl","kickstart",target])
+        elif action=="restart":
+            if not _service_definition_is_regular(path): raise ValueError("dashboard service is not installed")
+            if loaded: run(["launchctl","bootout",target])
+            run(["launchctl","bootstrap",domain,str(path)]); run(["launchctl","kickstart",target])
+        elif action=="uninstall":
+            if loaded:
+                run(["launchctl","bootout",target])
+                if launch_status(target)[0]: raise OSError("dashboard service remained loaded after bootout")
+            if _path_lexists(path): _unlink_service_definition(path)
+        _,running=launch_status(target) if action!="uninstall" else (False,False)
+        running_checker=lambda: launch_status(target)[1]
+        stop_command=["launchctl","bootout",target]
+    else:
+        unit=definition["unit"]
+        if action=="install":
+            _write_service_definition(path,definition["content"]); run(["systemctl","--user","daemon-reload"])
+            run(["systemctl","--user","enable",unit]); run(["systemctl","--user","restart",unit])
+        elif action=="restart":
+            if not _service_definition_is_regular(path): raise ValueError("dashboard service is not installed")
+            run(["systemctl","--user","restart",unit])
+        elif action=="uninstall":
+            broken_link=_service_definition_is_broken_symlink(path)
+            disabled=run(["systemctl","--user","disable","--now",unit],check=False)
+            still_active=systemd_running(unit)
+            if still_active:
+                if disabled.returncode:
+                    message=(disabled.stderr or disabled.stdout or "systemctl disable failed").strip()
+                    raise OSError(message)
+                raise OSError("dashboard service remained active after disable")
+            if disabled.returncode and not broken_link:
+                message=(disabled.stderr or disabled.stdout or "systemctl disable failed").strip()
+                raise OSError(message)
+            if _path_lexists(path): _unlink_service_definition(path)
+            run(["systemctl","--user","daemon-reload"])
+        running=systemd_running(unit) if action!="uninstall" else False
+        running_checker=lambda: systemd_running(unit)
+        stop_command=["systemctl","--user","stop",unit]
+    healthy=False
+    if action in {"install","restart"}:
+        deadline=time.monotonic()+max(0,health_timeout)
+        while not running and time.monotonic() < deadline:
+            time.sleep(.1); running=running_checker()
+        while True:
+            if running and health_checker(): healthy=True; break
+            if time.monotonic() >= deadline: break
+            time.sleep(.1)
+    elif running and action=="status": healthy=health_checker()
+    if action in {"install","restart"} and (not running or not healthy):
+        stopped=run(stop_command,check=False)
+        cleanup_deadline=time.monotonic()+2
+        try:
+            still_running=running_checker()
+            while still_running and time.monotonic() < cleanup_deadline:
+                time.sleep(.1); still_running=running_checker()
+        except OSError as error:
+            raise OSError(f"dashboard health failed and cleanup status failed: {error}") from error
+        if stopped.returncode or still_running:
+            detail=(stopped.stderr or stopped.stdout or "service remained active").strip()
+            raise OSError(f"dashboard health failed and cleanup failed: {detail}")
+        raise ValueError(f"dashboard service failed its health check; inspect {definition['data_dir']}/logs")
+    return {"ok":True,"action":action,"manager":definition["manager"],"unit":definition["unit"],"path":str(path),"installed":_service_definition_is_regular(path),"running":running,"healthy":healthy,"url":f"http://{SERVICE_HOST}:{SERVICE_PORT}","profile":definition["profile"],"data_dir":definition["data_dir"]}
+
+
 def validate_arguments(args) -> None:
     if sys.version_info < (3,11): raise ValueError("GymPilot requires Python 3.11 or newer")
     integer_limits={
@@ -1070,6 +1338,7 @@ def validate_arguments(args) -> None:
 def command(args):
     validate_arguments(args)
     ensure()
+    if args.command=="service": return manage_dashboard_service(args.action)
     if args.command=="init": return initialize()
     if args.command=="status":
         with connect() as con: counts={t:con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("routines","exercises","equipment_aliases","sessions","workout_sets")}
@@ -1363,6 +1632,9 @@ def parser():
     s=sub.add_parser("set"); ss=s.add_subparsers(dest="action",required=True); a=ss.add_parser("log"); a.add_argument("session",type=safe_int); a.add_argument("exercise",type=safe_int); a.add_argument("--weight",type=float,required=True); a.add_argument("--unit",choices=("kg","lb"),default="kg"); a.add_argument("--reps",type=safe_int,required=True); a.add_argument("--number",type=safe_int); a.add_argument("--side",default=""); a.add_argument("--equipment",type=safe_int); a.add_argument("--rpe",type=float); a.add_argument("--notes",default=""); a=ss.add_parser("correct"); a.add_argument("id",type=safe_int); a.add_argument("--weight",dest="weight_kg",type=float); a.add_argument("--reps",type=safe_int); a.add_argument("--rpe",type=float); a.add_argument("--notes")
     for name in ("export","backup"): sub.add_parser(name)
     sec=sub.add_parser("security"); secs=sec.add_subparsers(dest="action",required=True); secs.add_parser("enable"); secs.add_parser("disable")
+    svc=sub.add_parser("service"); svcs=svc.add_subparsers(dest="action",required=True)
+    for action in ("install","restart","status","uninstall"):
+        svcs.add_parser(action)
     srv=sub.add_parser("server"); srv.add_argument("--host",default="127.0.0.1"); srv.add_argument("--port",type=safe_int,default=8765)
     return p
 
