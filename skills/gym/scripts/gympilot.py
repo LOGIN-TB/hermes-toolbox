@@ -1246,7 +1246,7 @@ def manage_dashboard_service(action,system_name=None,user_home=None,executable=N
         message=(result.stderr or result.stdout or "systemctl is-active failed").strip()
         raise OSError(message)
 
-    systemd_env=os.environ.copy()
+    systemd_env={key:os.environ[key] for key in ("PATH","HOME","USER","LOGNAME","LANG","LC_ALL","LC_CTYPE") if key in os.environ}
     uid=os.getuid()
     systemd_env["XDG_RUNTIME_DIR"]=f"/run/user/{uid}"
     systemd_env["DBUS_SESSION_BUS_ADDRESS"]=f"unix:path=/run/user/{uid}/bus"
