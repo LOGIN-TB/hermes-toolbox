@@ -917,6 +917,54 @@ class GymPilotTest(unittest.TestCase):
         self.assertFalse(removed["installed"])
         self.assertTrue(any(call[0][:3] == ["systemctl", "--user", "disable"] for call in calls))
 
+    def test_headless_linux_install_explains_linger_before_writing_unit(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        user_home = Path(self.tmp.name).resolve() / "headless-user"
+        definition = gym.dashboard_service_definition("Linux", user_home, Path("/usr/bin/python3"))
+        calls = []
+        def runner(command, **kwargs):
+            calls.append((command, kwargs))
+            return SimpleNamespace(returncode=1, stdout="offline\n", stderr="Failed to connect to bus")
+        with self.assertRaisesRegex(OSError, "loginctl enable-linger") as raised:
+            gym.manage_dashboard_service(
+                "install", system_name="Linux", user_home=user_home,
+                executable=Path("/usr/bin/python3"), runner=runner,
+            )
+        message = str(raised.exception)
+        uid = os.getuid()
+        self.assertIn(f"user@{uid}.service", message)
+        self.assertIn(f"XDG_RUNTIME_DIR=/run/user/{uid}", message)
+        self.assertIn(f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus", message)
+        self.assertIn("explicit approval", message)
+        self.assertFalse(os.path.lexists(definition["path"]))
+        self.assertFalse(any(command[2] in {"daemon-reload", "enable", "restart"} for command, _ in calls))
+
+    def test_linux_service_supplies_user_bus_environment_automatically(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        user_home = Path(self.tmp.name).resolve() / "bus-user"
+        calls = []
+        def runner(command, **kwargs):
+            calls.append((command, kwargs))
+            operation = command[2] if command[:2] == ["systemctl", "--user"] and len(command) > 2 else ""
+            if operation == "is-system-running":
+                return SimpleNamespace(returncode=1, stdout="degraded\n", stderr="")
+            if operation == "is-active":
+                return SimpleNamespace(returncode=3, stdout="inactive\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        result = gym.manage_dashboard_service(
+            "status", system_name="Linux", user_home=user_home,
+            executable=Path("/usr/bin/python3"), runner=runner,
+        )
+        self.assertFalse(result["running"])
+        uid = os.getuid()
+        systemd_calls = [(command, kwargs) for command, kwargs in calls if command[:2] == ["systemctl", "--user"]]
+        self.assertTrue(systemd_calls)
+        for _command, kwargs in systemd_calls:
+            self.assertEqual(kwargs["env"]["XDG_RUNTIME_DIR"], f"/run/user/{uid}")
+            self.assertEqual(kwargs["env"]["DBUS_SESSION_BUS_ADDRESS"], f"unix:path=/run/user/{uid}/bus")
+
     def test_service_manager_failures_are_fail_closed_and_linux_reinstall_restarts(self):
         gym = load_module()
         os.environ["HERMES_HOME"] = str(self.home)
@@ -1010,8 +1058,8 @@ class GymPilotTest(unittest.TestCase):
         os.environ["HERMES_HOME"] = str(self.home)
         calls = []
         state = {"active": False}
-        def runner(command, **_kwargs):
-            calls.append(command)
+        def runner(command, **kwargs):
+            calls.append((command, kwargs))
             operation = command[2] if command[:2] == ["systemctl", "--user"] and len(command) > 2 else ""
             if operation == "restart": state["active"] = True
             if operation == "stop": state["active"] = False
@@ -1023,7 +1071,11 @@ class GymPilotTest(unittest.TestCase):
                 executable=Path("/usr/bin/python3"), runner=runner,
                 health_checker=lambda: False, health_timeout=0,
             )
-        self.assertTrue(any(call[:3] == ["systemctl", "--user", "stop"] for call in calls))
+        stop_calls = [(command, kwargs) for command, kwargs in calls if command[:3] == ["systemctl", "--user", "stop"]]
+        self.assertEqual(len(stop_calls), 1)
+        uid = os.getuid()
+        self.assertEqual(stop_calls[0][1]["env"]["XDG_RUNTIME_DIR"], f"/run/user/{uid}")
+        self.assertEqual(stop_calls[0][1]["env"]["DBUS_SESSION_BUS_ADDRESS"], f"unix:path=/run/user/{uid}/bus")
 
     def test_failed_health_cleanup_reports_manager_failure_and_leaves_definition(self):
         gym = load_module()
@@ -1547,9 +1599,11 @@ class GymPilotTest(unittest.TestCase):
 
     def test_skill_declares_bare_gym_entrypoint_and_home_command(self):
         skill = (ROOT / "skills" / "gym" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("version: 0.1.0-alpha.5", skill)
+        self.assertIn("version: 0.1.0-alpha.6", skill)
         self.assertIn("## `/gym`: stabiler Einstieg", skill)
         self.assertIn('python3 "$GYM_CLI" --json home', skill)
+        self.assertIn("loginctl enable-linger BENUTZER", skill)
+        self.assertIn("Linger niemals still aktivieren", skill)
         self.assertIn('python3 "$GYM_CLI" --json service install', skill)
         self.assertIn('python3 "$GYM_CLI" --json service status', skill)
         self.assertIn("unabhängig vom Hermes-Gateway", skill)

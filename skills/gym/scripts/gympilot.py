@@ -16,6 +16,7 @@ import mimetypes
 import os
 import platform
 import plistlib
+import pwd
 from pathlib import Path
 import re
 import secrets
@@ -1220,8 +1221,10 @@ def manage_dashboard_service(action,system_name=None,user_home=None,executable=N
     definition=dashboard_service_definition(system_name,user_home,executable); path=definition["path"]
     _validate_service_parent(path)
     private_directory(_service_data_root()); private_directory(_service_data_root()/"logs")
-    def run(command,check=True):
-        result=runner(command,text=True,capture_output=True)
+    def run(command,check=True,env=None):
+        if env is None and command[:2]==["systemctl","--user"]: env=systemd_env
+        if env is None: result=runner(command,text=True,capture_output=True)
+        else: result=runner(command,text=True,capture_output=True,env=env)
         if check and result.returncode:
             message=(result.stderr or result.stdout or "service manager command failed").strip()
             raise OSError(message)
@@ -1237,11 +1240,33 @@ def manage_dashboard_service(action,system_name=None,user_home=None,executable=N
         raise OSError(message)
 
     def systemd_running(unit):
-        result=run(["systemctl","--user","is-active","--quiet",unit],check=False)
+        result=systemd_run(["is-active","--quiet",unit],check=False)
         if result.returncode==0: return True
         if result.returncode in {3,4}: return False
         message=(result.stderr or result.stdout or "systemctl is-active failed").strip()
         raise OSError(message)
+
+    systemd_env=os.environ.copy()
+    uid=os.getuid()
+    systemd_env["XDG_RUNTIME_DIR"]=f"/run/user/{uid}"
+    systemd_env["DBUS_SESSION_BUS_ADDRESS"]=f"unix:path=/run/user/{uid}/bus"
+    def systemd_run(arguments,check=True):
+        return run(["systemctl","--user",*arguments],check=check,env=systemd_env)
+    if definition["manager"]=="systemd":
+        manager=systemd_run(["is-system-running"],check=False)
+        manager_state=(manager.stdout or "").strip().lower()
+        if manager.returncode and manager_state not in {"running","degraded"}:
+            user_name=pwd.getpwuid(uid).pw_name
+            detail=(manager.stderr or manager.stdout or "systemd user manager is unavailable").strip()
+            raise OSError(
+                f"systemd --user is unavailable for {user_name} (uid {uid}): {detail}. "
+                "GymPilot did not install or modify a service definition. On a headless server, "
+                "obtain explicit approval before the administrator runs "
+                f"`loginctl enable-linger {user_name}` and `systemctl start user@{uid}.service`. "
+                f"Then retry with XDG_RUNTIME_DIR=/run/user/{uid} and "
+                f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus. "
+                "Do not use a transient background server as a persistence fallback."
+            )
     if definition["manager"]=="launchd":
         domain=f"gui/{os.getuid()}"; target=f"{domain}/{definition['label']}"
         loaded,_=launch_status(target)
@@ -1264,14 +1289,14 @@ def manage_dashboard_service(action,system_name=None,user_home=None,executable=N
     else:
         unit=definition["unit"]
         if action=="install":
-            _write_service_definition(path,definition["content"]); run(["systemctl","--user","daemon-reload"])
-            run(["systemctl","--user","enable",unit]); run(["systemctl","--user","restart",unit])
+            _write_service_definition(path,definition["content"]); systemd_run(["daemon-reload"])
+            systemd_run(["enable",unit]); systemd_run(["restart",unit])
         elif action=="restart":
             if not _service_definition_is_regular(path): raise ValueError("dashboard service is not installed")
-            run(["systemctl","--user","restart",unit])
+            systemd_run(["restart",unit])
         elif action=="uninstall":
             broken_link=_service_definition_is_broken_symlink(path)
-            disabled=run(["systemctl","--user","disable","--now",unit],check=False)
+            disabled=systemd_run(["disable","--now",unit],check=False)
             still_active=systemd_running(unit)
             if still_active:
                 if disabled.returncode:
@@ -1282,7 +1307,7 @@ def manage_dashboard_service(action,system_name=None,user_home=None,executable=N
                 message=(disabled.stderr or disabled.stdout or "systemctl disable failed").strip()
                 raise OSError(message)
             if _path_lexists(path): _unlink_service_definition(path)
-            run(["systemctl","--user","daemon-reload"])
+            systemd_run(["daemon-reload"])
         running=systemd_running(unit) if action!="uninstall" else False
         running_checker=lambda: systemd_running(unit)
         stop_command=["systemctl","--user","stop",unit]

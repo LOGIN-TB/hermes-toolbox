@@ -59,6 +59,8 @@ Der Service startet das lokale Dashboard unabhängig vom Gateway. Ein `/restart`
 
 Da der persistente Service fest an `127.0.0.1:8765` gebunden ist, kann pro Benutzer immer nur ein GymPilot-Profil gleichzeitig laufen. Unter Linux gehört der Dienst zum `systemd --user`-Manager und läuft ohne interaktive Anmeldung nur weiter, wenn der Administrator für den Benutzer bewusst Linger aktiviert hat.
 
+Auf headless Linux-Systemen prüft GymPilot den User-Manager vor dem Schreiben der Unit und setzt für `systemctl --user` automatisch `XDG_RUNTIME_DIR=/run/user/UID` und `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/UID/bus`. Ist der Manager nicht verfügbar, bricht die Installation ohne Unit-Änderung ab und nennt Benutzer, UID und die erforderlichen Befehle. `loginctl enable-linger BENUTZER` ist eine dauerhafte Systemänderung und darf erst nach ausdrücklicher Zustimmung durch einen Administrator ausgeführt werden; danach ist `systemctl start user@UID.service` erforderlich. Anschließend `service install` wiederholen und `installed: true`, `running: true` sowie `healthy: true` prüfen. Ein manueller Hintergrundprozess ist kein zulässiger Ersatz. Python 3.11 oder neuer genügt; insbesondere ist Python 3.13 vollständig ausreichend.
+
 ### Aktualisieren
 
 ```bash
