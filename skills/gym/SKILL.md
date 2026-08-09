@@ -1,7 +1,7 @@
 ---
 name: gym
 description: Lokale Trainingspläne importieren oder manuell pflegen und Training protokollieren.
-version: 0.1.0-alpha.5
+version: 0.1.0-alpha.6
 author: LOGIN-TB contributors
 license: MIT
 platforms: [linux, macos]
@@ -42,6 +42,8 @@ Den Dashboard-Service bei jedem `/gym`-Einstieg über `service status` prüfen. 
 ```bash
 python3 "$GYM_CLI" --json service install
 ```
+
+Unter Linux prüft `service status` beziehungsweise `service install` zuerst den `systemd --user`-Manager und setzt für alle Manageraufrufe automatisch `XDG_RUNTIME_DIR=/run/user/UID` sowie `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/UID/bus`. Ist der User-Manager auf einem headless Server nicht verfügbar, die vollständige CLI-Fehlermeldung mit Benutzer, UID und Reparaturbefehlen wiedergeben. Vor `loginctl enable-linger BENUTZER` ausdrücklich erklären, dass damit der User-Manager dauerhaft ohne Login laufen darf, und die Zustimmung einholen. Erst danach darf ein Administrator Linger aktivieren und `systemctl start user@UID.service` starten. Anschließend `service install` erneut ausführen und `installed`, `running` und `healthy` prüfen. Linger niemals still aktivieren und niemals einen transienten Hintergrundprozess als Persistenz-Ersatz starten. Jede installierte Python-Version ab 3.11 ist zulässig; Python 3.13 benötigt kein zusätzliches `python3.11`.
 
 Der profilbezogene Benutzer-Service läuft fest auf `127.0.0.1:8765`, auf macOS über `launchd` und unter Linux über `systemd --user` unabhängig vom Hermes-Gateway. Ein Gateway-Neustart darf das Dashboard danach nicht mehr beenden. Ein echter Dashboard-Absturz wird beim nächsten `/gym`-Status kontrolliert repariert; es gibt bewusst keine unbegrenzte Crash-Schleife. Abweichende Bindungen sind ausschließlich beim expliziten Vordergrundserver zulässig. `service uninstall` muss vor einer endgültigen Skill-Deinstallation ausgeführt werden, weil die Service-Definition auf die installierte GymPilot-CLI verweist.
 
