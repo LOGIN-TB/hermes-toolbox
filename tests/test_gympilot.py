@@ -1513,7 +1513,9 @@ class GymPilotTest(unittest.TestCase):
             thread.start()
             try:
                 conn = http.client.HTTPConnection("::1", server.server_port, timeout=5)
-                conn.request("GET", "/api/health")
+                conn.putrequest("GET", "/api/health", skip_host=True)
+                conn.putheader("Host", f"[::1]:{server.server_port}")
+                conn.endheaders()
                 response = conn.getresponse(); response.read()
                 self.assertEqual(response.status, 200)
             finally:
