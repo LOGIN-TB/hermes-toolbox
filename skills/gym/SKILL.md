@@ -1,7 +1,7 @@
 ---
 name: gym
 description: Lokale Trainingspläne importieren oder manuell pflegen und Training protokollieren.
-version: 0.1.0-alpha.8
+version: 0.1.0-alpha.9
 author: LOGIN-TB contributors
 license: MIT
 platforms: [linux, macos]
@@ -43,11 +43,13 @@ Den Dashboard-Service bei jedem `/gym`-Einstieg über `service status` prüfen. 
 python3 "$GYM_CLI" --json service install
 ```
 
+Loopback ist der sichere Standard. Wird Zugriff aus dem lokalen Netz ausdrücklich verlangt, zuerst die konkrete private Interfaceadresse ermitteln und nach Bestätigung gezielt installieren, beispielsweise `python3 "$GYM_CLI" --json service install --host 192.168.50.10`. Niemals `0.0.0.0`, `::`, öffentliche IP-Adressen, Tunnel oder Router-Portweiterleitungen verwenden. Darauf hinweisen, dass HTTP unverschlüsselt ist und ohne aktivierten Passwortschutz jedes Gerät im selben Netz die Trainingsauswertung lesen kann. Passwörter niemals im Chat erfassen; `security enable` darf nur interaktiv in einem lokalen Terminal laufen.
+
 Unter Linux prüft `service status` beziehungsweise `service install` zuerst den `systemd --user`-Manager und setzt für alle Manageraufrufe automatisch `XDG_RUNTIME_DIR=/run/user/UID` sowie `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/UID/bus`. Ist der User-Manager auf einem headless Server nicht verfügbar, die vollständige CLI-Fehlermeldung mit Benutzer, UID und Reparaturbefehlen wiedergeben. Vor `loginctl enable-linger BENUTZER` ausdrücklich erklären, dass damit der User-Manager dauerhaft ohne Login laufen darf, und die Zustimmung einholen. Erst danach darf ein Administrator Linger aktivieren und `systemctl start user@UID.service` starten. Anschließend `service install` erneut ausführen und `installed`, `running` und `healthy` prüfen. Linger niemals still aktivieren und niemals einen transienten Hintergrundprozess als Persistenz-Ersatz starten. Jede installierte Python-Version ab 3.11 ist zulässig; Python 3.13 benötigt kein zusätzliches `python3.11`.
 
-Der profilbezogene Benutzer-Service läuft fest auf `127.0.0.1:8765`, auf macOS über `launchd` und unter Linux über `systemd --user` unabhängig vom Hermes-Gateway. Ein Gateway-Neustart darf das Dashboard danach nicht mehr beenden. Ein echter Dashboard-Absturz wird beim nächsten `/gym`-Status kontrolliert repariert; es gibt bewusst keine unbegrenzte Crash-Schleife. Abweichende Bindungen sind ausschließlich beim expliziten Vordergrundserver zulässig. `service uninstall` muss vor einer endgültigen Skill-Deinstallation ausgeführt werden, weil die Service-Definition auf die installierte GymPilot-CLI verweist.
+Der profilbezogene Benutzer-Service läuft standardmäßig auf `127.0.0.1:8765`, auf macOS über `launchd` und unter Linux über `systemd --user` unabhängig vom Hermes-Gateway. Eine explizit installierte private LAN-/VPN-Adresse wird aus der geschützten Servicebeschreibung für `status`, `restart` und ein späteres `service install` wiederverwendet. Manipulierte, mehrdeutige, Wildcard- oder öffentliche Endpunkte werden fail-closed abgewiesen. Ein Gateway-Neustart darf das Dashboard nicht beenden. Ein echter Dashboard-Absturz wird beim nächsten `/gym`-Status kontrolliert repariert; es gibt bewusst keine unbegrenzte Crash-Schleife. `service uninstall` muss vor einer endgültigen Skill-Deinstallation ausgeführt werden, weil die Service-Definition auf die installierte GymPilot-CLI verweist.
 
-Nach jeder GymPilot-Skill-Aktualisierung `service install` erneut ausführen. Das ersetzt die Definition und startet den Dienst mit dem aktuellen Code neu; die Health-Code-ID verhindert zusätzlich, dass ein alter Prozess als aktuell gesund gilt. Wegen des festen Ports kann pro Benutzer nur ein GymPilot-Profil gleichzeitig laufen. Unter Linux endet der `systemd --user`-Manager normalerweise mit der Benutzersitzung; Betrieb ohne Anmeldung setzt eine bewusst administrierte Linger-Konfiguration voraus.
+Nach jeder GymPilot-Skill-Aktualisierung `service install` erneut ausführen. Ohne neue `--host`-Angabe bleibt eine bereits installierte private Bindung erhalten. Das ersetzt die Definition und startet den Dienst mit dem aktuellen Code neu; die Health-Code-ID verhindert zusätzlich, dass ein alter Prozess als aktuell gesund gilt. Wegen des festen Ports kann pro Benutzer nur ein GymPilot-Profil gleichzeitig laufen. Eine DHCP-Adresse kann sich ändern; für einen dauerhaft stabilen LAN-Zugriff ist eine Routerreservierung sinnvoll. Unter Linux endet der `systemd --user`-Manager normalerweise mit der Benutzersitzung; Betrieb ohne Anmeldung setzt eine bewusst administrierte Linger-Konfiguration voraus.
 
 Nach Installation oder Aktualisierung in einem laufenden Gateway `/reload-skills` ausführen. Danach muss `/gym` über `/commands` auffindbar und manuell aufrufbar sein. Das sichtbare Telegram-Befehlsmenü wird erst beim Gateway-Start über die Bot API registriert und ist kapazitätsbegrenzt; deshalb anschließend `/restart` ausführen und die Sichtbarkeit separat prüfen. Fehlt `/gym` trotz erfolgreichem manuellem Aufruf weiterhin im Menü, ist das konfigurierte Menülimit eine mögliche Ursache. Zusätzlich den erfolgreichen Gateway-Neustart und in den Gateway-Logs die Bot-API-Registrierung `set_my_commands` für den betroffenen Telegram-Scope prüfen. Einsatzbereitschaft erst bestätigen, wenn der echte Aufruf `/gym` den oben beschriebenen `home`-Einstieg ausführt; Menü-Sichtbarkeit ist eine zusätzliche, konfigurationsabhängige UX-Prüfung.
 
@@ -104,6 +106,7 @@ Vor jedem Schreibvorgang Übung, Gewicht, Einheit und Wiederholungen eindeutig b
 ## Dashboard, Export, Backup und Sicherheit
 
 - Dashboard persistent installieren: `python3 "$GYM_CLI" --json service install`
+- Dashboard gezielt im privaten LAN installieren: `python3 "$GYM_CLI" --json service install --host PRIVATE_IP`
 - Dashboard prüfen: `python3 "$GYM_CLI" --json service status`
 - Dashboard neu starten: `python3 "$GYM_CLI" --json service restart`
 - Dashboard-Service entfernen: `python3 "$GYM_CLI" --json service uninstall`

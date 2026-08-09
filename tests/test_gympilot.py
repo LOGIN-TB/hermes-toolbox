@@ -750,6 +750,135 @@ class GymPilotTest(unittest.TestCase):
         self.assertNotEqual(mac["label"], other["label"])
         self.assertNotEqual(mac["path"], other["path"])
 
+    def test_dashboard_service_definition_accepts_only_explicit_private_lan_host(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        definition = gym.dashboard_service_definition(
+            system_name="Darwin",
+            user_home=Path(self.tmp.name) / "user",
+            executable=Path("/usr/bin/python3"),
+            host="192.168.50.10",
+        )
+        plist = plistlib.loads(definition["content"])
+        self.assertEqual(plist["ProgramArguments"][-4:], ["--host", "192.168.50.10", "--port", "8765"])
+        self.assertEqual(definition["host"], "192.168.50.10")
+        self.assertEqual(definition["url"], "http://192.168.50.10:8765")
+        for unsafe in ("0.0.0.0", "::", "192.0.0.8", "192.0.2.1", "198.18.0.1", "255.255.255.255", "::ffff:255.255.255.255", "fe80::1%en 0", "fe80::1%en0?x", "fe80::1%en0#x", "fe80::1%-bad", "fe80::1%en0%evil", "8.8.8.8", "example.com"):
+            with self.subTest(host=unsafe), self.assertRaisesRegex(ValueError, "concrete local, LAN, or VPN"):
+                gym.dashboard_service_definition(system_name="Darwin", host=unsafe)
+
+    def test_systemd_service_round_trips_scoped_ipv6_host(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        definition = gym.dashboard_service_definition(
+            "Linux", Path(self.tmp.name) / "scoped-user", Path("/usr/bin/python3"), host="fe80::1%en0"
+        )
+        gym._write_service_definition(definition["path"], definition["content"])
+        self.assertEqual(gym._installed_service_endpoint(definition), ("fe80::1%en0", 8765))
+
+    def test_dashboard_service_remembers_installed_lan_host_for_status_and_restart(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        user_home = Path(self.tmp.name) / "lan-user"
+        state = {"loaded": False}
+        def runner(command, **_kwargs):
+            operation = command[1] if command and command[0] == "launchctl" and len(command) > 1 else ""
+            if operation == "bootout": state["loaded"] = False
+            if operation in {"bootstrap", "kickstart"}: state["loaded"] = True
+            if operation == "print":
+                return SimpleNamespace(
+                    returncode=0 if state["loaded"] else 3,
+                    stdout="state = running\n" if state["loaded"] else "",
+                    stderr="" if state["loaded"] else "Could not find service",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        kwargs = {
+            "system_name": "Darwin", "user_home": user_home,
+            "executable": Path("/usr/bin/python3"), "runner": runner,
+            "health_checker": lambda: True,
+        }
+        installed = gym.manage_dashboard_service("install", host="192.168.50.10", **kwargs)
+        self.assertEqual(installed["url"], "http://192.168.50.10:8765")
+        status = gym.manage_dashboard_service("status", **kwargs)
+        self.assertEqual(status["url"], "http://192.168.50.10:8765")
+        restarted = gym.manage_dashboard_service("restart", **kwargs)
+        self.assertEqual(restarted["url"], "http://192.168.50.10:8765")
+        plist = plistlib.loads(Path(restarted["path"]).read_bytes())
+        self.assertEqual(plist["ProgramArguments"][-4:], ["--host", "192.168.50.10", "--port", "8765"])
+
+    def test_installed_service_endpoint_rejects_duplicate_host_arguments(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        definition = gym.dashboard_service_definition(
+            "Linux", Path(self.tmp.name) / "endpoint-user", Path("/usr/bin/python3"), host="192.168.50.10"
+        )
+        tampered = definition["content"].replace(
+            '"--host" "192.168.50.10"',
+            '"--host" "10.0.0.2" "--host" "192.168.50.10"',
+        )
+        gym._write_service_definition(definition["path"], tampered)
+        with self.assertRaisesRegex(ValueError, "endpoint"):
+            gym._installed_service_endpoint(definition)
+
+    def test_installed_service_endpoint_rejects_equals_style_option_injection(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        for system_name in ("Darwin", "Linux"):
+            with self.subTest(system_name=system_name):
+                definition = gym.dashboard_service_definition(
+                    system_name, Path(self.tmp.name) / f"equals-{system_name}", Path("/usr/bin/python3"), host="192.168.50.10"
+                )
+                if system_name == "Darwin":
+                    payload = plistlib.loads(definition["content"])
+                    payload["ProgramArguments"].append("--host=10.0.0.2")
+                    tampered = plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=True)
+                else:
+                    tampered = definition["content"].replace('"server"', '"--host=10.0.0.2" "server"')
+                gym._write_service_definition(definition["path"], tampered)
+                with self.assertRaisesRegex(ValueError, "endpoint|configuration|arguments"):
+                    gym._installed_service_endpoint(definition)
+
+    def test_rejected_service_host_does_not_initialize_profile(self):
+        result, payload = self.cli("service", "install", "--host", "0.0.0.0", check=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertIsInstance(payload, dict)
+        self.assertIn("wildcard/public", payload["error"])
+        self.assertFalse(self.home.exists())
+
+    def test_service_install_cli_passes_explicit_private_host(self):
+        gym = load_module()
+        captured = []
+        setattr(gym, "ensure", lambda: None)
+        setattr(gym, "manage_dashboard_service", lambda action, host=None: captured.append((action, host)) or {"ok": True})
+        args = gym.parser().parse_args(["service", "install", "--host", "192.168.50.10"])
+        self.assertEqual(gym.command(args), {"ok": True})
+        self.assertEqual(captured, [("install", "192.168.50.10")])
+        status = gym.parser().parse_args(["service", "status"])
+        gym.command(status)
+        self.assertEqual(captured[-1], ("status", None))
+
+    def test_dashboard_health_uses_the_configured_private_service_host(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        gym.initialize()
+        seen = []
+        class Response:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self, _size=-1):
+                return json.dumps({
+                    "status": "ok", "schema_version": gym.SCHEMA_VERSION,
+                    "instance_id": gym.dashboard_instance_id(), "code_id": gym.SERVICE_CODE_ID,
+                }).encode()
+        class Opener:
+            def open(self, request, **_kwargs):
+                seen.append(request.full_url)
+                return Response()
+        self.assertTrue(gym.dashboard_health(host="192.168.50.10", opener=Opener()))
+        self.assertEqual(seen, ["http://192.168.50.10:8765/api/health"])
+
     def test_dashboard_health_accepts_the_real_health_contract(self):
         gym = load_module()
         os.environ["HERMES_HOME"] = str(self.home)
@@ -1610,7 +1739,7 @@ class GymPilotTest(unittest.TestCase):
 
     def test_skill_declares_bare_gym_entrypoint_and_home_command(self):
         skill = (ROOT / "skills" / "gym" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("version: 0.1.0-alpha.8", skill)
+        self.assertIn("version: 0.1.0-alpha.9", skill)
         self.assertIn("## `/gym`: stabiler Einstieg", skill)
         self.assertIn('python3 "$GYM_CLI" --json home', skill)
         self.assertIn("loginctl enable-linger BENUTZER", skill)
