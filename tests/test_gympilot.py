@@ -1167,21 +1167,27 @@ class GymPilotTest(unittest.TestCase):
         user_home = Path(self.tmp.name) / "user"
         definition = gym.dashboard_service_definition("Darwin", user_home, Path("/usr/bin/python3"))
         gym._write_service_definition(definition["path"], definition["content"])
-        state = {"loaded": True, "waiting_checks": 0}
+        state = {"loaded": True, "pending_bootout_checks": 0, "waiting_checks": 0}
         calls = []
         def runner(command, **_kwargs):
             calls.append(command)
             operation = command[1] if command and command[0] == "launchctl" and len(command) > 1 else ""
-            if operation == "bootout": state["loaded"] = False
+            if operation == "bootout": state["pending_bootout_checks"] = 2
             if operation == "bootstrap":
+                if state["loaded"]:
+                    return SimpleNamespace(returncode=5, stdout="", stderr="Bootstrap failed: 5: Input/output error")
                 state["loaded"] = True
                 state["waiting_checks"] = 1
             if operation == "print":
+                if state["pending_bootout_checks"]:
+                    state["pending_bootout_checks"] -= 1
+                    if not state["pending_bootout_checks"]: state["loaded"] = False
                 if state["loaded"] and state["waiting_checks"]:
                     state["waiting_checks"] -= 1
                     return SimpleNamespace(returncode=0, stdout="state = waiting\n", stderr="")
                 return SimpleNamespace(returncode=0 if state["loaded"] else 3,
-                                       stdout="state = running\n" if state["loaded"] else "", stderr="")
+                                       stdout="state = running\n" if state["loaded"] else "",
+                                       stderr="" if state["loaded"] else "Could not find service")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         result = gym.manage_dashboard_service(
             "restart", system_name="Darwin", user_home=user_home,
