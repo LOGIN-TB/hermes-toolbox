@@ -878,6 +878,8 @@ class GymPilotTest(unittest.TestCase):
         gym = load_module()
         os.environ["HERMES_HOME"] = str(self.home)
         user_home = Path(self.tmp.name) / "user"
+        os.environ["GYMPILOT_LIFECYCLE_SECRET"] = "must-not-reach-systemctl"
+        self.addCleanup(os.environ.pop, "GYMPILOT_LIFECYCLE_SECRET", None)
         calls = []
         state = {"active": False}
 
@@ -916,6 +918,12 @@ class GymPilotTest(unittest.TestCase):
         self.assertFalse(service_path.exists())
         self.assertFalse(removed["installed"])
         self.assertTrue(any(call[0][:3] == ["systemctl", "--user", "disable"] for call in calls))
+        allowed={"PATH","HOME","USER","LOGNAME","LANG","LC_ALL","LC_CTYPE","XDG_RUNTIME_DIR","DBUS_SESSION_BUS_ADDRESS"}
+        systemd_environments=[kwargs["env"] for command,kwargs in calls if command[:2]==["systemctl","--user"]]
+        self.assertTrue(systemd_environments)
+        for environment in systemd_environments:
+            self.assertLessEqual(set(environment),allowed)
+            self.assertNotIn("GYMPILOT_LIFECYCLE_SECRET",environment)
 
     def test_headless_linux_install_explains_linger_before_writing_unit(self):
         gym = load_module()
@@ -943,6 +951,8 @@ class GymPilotTest(unittest.TestCase):
     def test_linux_service_supplies_user_bus_environment_automatically(self):
         gym = load_module()
         os.environ["HERMES_HOME"] = str(self.home)
+        os.environ["GYMPILOT_TEST_SECRET"] = "must-not-reach-systemctl"
+        self.addCleanup(os.environ.pop, "GYMPILOT_TEST_SECRET", None)
         user_home = Path(self.tmp.name).resolve() / "bus-user"
         calls = []
         def runner(command, **kwargs):
@@ -964,6 +974,7 @@ class GymPilotTest(unittest.TestCase):
         for _command, kwargs in systemd_calls:
             self.assertEqual(kwargs["env"]["XDG_RUNTIME_DIR"], f"/run/user/{uid}")
             self.assertEqual(kwargs["env"]["DBUS_SESSION_BUS_ADDRESS"], f"unix:path=/run/user/{uid}/bus")
+            self.assertNotIn("GYMPILOT_TEST_SECRET", kwargs["env"])
 
     def test_service_manager_failures_are_fail_closed_and_linux_reinstall_restarts(self):
         gym = load_module()
@@ -1599,7 +1610,7 @@ class GymPilotTest(unittest.TestCase):
 
     def test_skill_declares_bare_gym_entrypoint_and_home_command(self):
         skill = (ROOT / "skills" / "gym" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("version: 0.1.0-alpha.6", skill)
+        self.assertIn("version: 0.1.0-alpha.7", skill)
         self.assertIn("## `/gym`: stabiler Einstieg", skill)
         self.assertIn('python3 "$GYM_CLI" --json home', skill)
         self.assertIn("loginctl enable-linger BENUTZER", skill)
