@@ -1354,18 +1354,24 @@ def manage_dashboard_service(action,system_name=None,user_home=None,executable=N
     if definition["manager"]=="launchd":
         domain=f"gui/{os.getuid()}"; target=f"{domain}/{definition['label']}"
         loaded,_=launch_status(target)
+        def wait_launch_unloaded():
+            deadline=time.monotonic()+2
+            while launch_status(target)[0]:
+                if time.monotonic() >= deadline: raise OSError("dashboard service remained loaded after bootout")
+                time.sleep(.1)
         if action=="install":
-            if loaded: run(["launchctl","bootout",target])
+            if loaded:
+                run(["launchctl","bootout",target]); wait_launch_unloaded()
             _write_service_definition(path,definition["content"])
             run(["launchctl","bootstrap",domain,str(path)]); run(["launchctl","kickstart",target])
         elif action=="restart":
             if not _service_definition_is_regular(path): raise ValueError("dashboard service is not installed")
-            if loaded: run(["launchctl","bootout",target])
+            if loaded:
+                run(["launchctl","bootout",target]); wait_launch_unloaded()
             run(["launchctl","bootstrap",domain,str(path)]); run(["launchctl","kickstart",target])
         elif action=="uninstall":
             if loaded:
-                run(["launchctl","bootout",target])
-                if launch_status(target)[0]: raise OSError("dashboard service remained loaded after bootout")
+                run(["launchctl","bootout",target]); wait_launch_unloaded()
             if _path_lexists(path): _unlink_service_definition(path)
         _,running=launch_status(target) if action!="uninstall" else (False,False)
         running_checker=lambda: launch_status(target)[1]
