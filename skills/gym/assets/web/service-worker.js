@@ -1,4 +1,4 @@
-const CACHE = 'gympilot-shell-v22';
+const CACHE = 'gympilot-shell-v23';
 const SHELL = [
   '/',
   '/index.html',

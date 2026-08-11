@@ -631,6 +631,7 @@ for (const name of viewNames) {
 }
 for (const label of ['Übersicht', 'Training', 'Fortschritt', 'Plan']) assert.match(index, new RegExp(label));
 assert.match(index, /<title>GymPilot<\/title>/);
+assert.doesNotMatch(index, /Jeder Satz, jedes Gewicht und jede Wiederholung übersichtlich an einem Ort\./);
 assert.match(index, /class="brand"[^>]*>.*<strong>GymPilot<\/strong>/);
 assert.doesNotMatch(index, /Training Cockpit/);
 assert.match(index, /<button[^>]+id="dataStatus"/);
@@ -674,7 +675,7 @@ const swContext = vm.createContext({
   },
 });
 vm.runInContext(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), swContext);
-assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v22/);
+assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v23/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /apple-touch-icon-v20\.png/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /icon-512-v20\.png/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /['"]\/favicon\.ico['"]/);
