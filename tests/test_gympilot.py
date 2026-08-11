@@ -1606,10 +1606,20 @@ class GymPilotTest(unittest.TestCase):
         guide = (ROOT / "docs" / "gympilot-iphone-installation.md").read_text(encoding="utf-8")
         skill = (ROOT / "skills" / "gym" / "SKILL.md").read_text(encoding="utf-8")
         guide_link = "[GymPilot auf einem iPhone installieren](docs/gympilot-iphone-installation.md)"
-        profile_url = "https://192.168.50.10:8765/install/GymPilot-WebClip.mobileconfig"
+        profile_url_schema = "https://PRIVATE_IP:8765/install/GymPilot-WebClip.mobileconfig"
         self.assertIn(guide_link, readme)
-        self.assertIn(f"]({profile_url})", readme)
-        self.assertIn(f"]({profile_url})", guide)
+        self.assertIn(profile_url_schema, readme)
+        self.assertIn(profile_url_schema, guide)
+        forbidden_host_details = (
+            "192.168." + "1.90",
+            "/Users/" + "bot",
+            "M4Bot" + ".local",
+        )
+        for public_text in (readme, guide, skill):
+            for forbidden in forbidden_host_details:
+                self.assertNotIn(forbidden, public_text)
+        self.assertNotIn(f"]({profile_url_schema})", readme)
+        self.assertNotIn(f"]({profile_url_schema})", guide)
         for field in ("ca_certificate", "webclip_profile_url", "installed", "running", "healthy"):
             self.assertIn(field, guide)
         for requirement in (

@@ -58,7 +58,7 @@ python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service status
 Für den Zugriff vom iPhone wird GymPilot ausschließlich an eine konkrete private LAN-/VPN-Adresse gebunden und mit HTTPS installiert:
 
 ```bash
-python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service install --host 192.168.50.10 --https
+python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service install --host PRIVATE_IP --https
 ```
 
 `--https` erzeugt profilintern eine private GymPilot-CA und ein Serverzertifikat mit der konkreten LAN-IP als Subject Alternative Name. Die JSON-Ausgabe nennt:
@@ -69,9 +69,13 @@ python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service install
 
 Nur das öffentliche CA-Zertifikat darf auf das eigene Telefon übertragen werden. Der private CA-Schlüssel bleibt auf dem Rechner und gehört weder in eine Nachricht noch in ein Repository. Safari muss die Dashboard-URL anschließend ohne Zertifikatswarnung laden.
 
-Für die Beispieladresse ist der Installationslink:
+Die lokale Installationsadresse steht in `webclip_profile_url`. Sie hat die Form:
 
-[GymPilot-Web-Clip-Profil installieren](https://192.168.50.10:8765/install/GymPilot-WebClip.mobileconfig)
+```text
+https://PRIVATE_IP:8765/install/GymPilot-WebClip.mobileconfig
+```
+
+Diesen Wert aus der eigenen `service install`- oder `service status`-Ausgabe direkt in Safari öffnen.
 
 Nicht Safaris Funktion „Zum Home-Bildschirm“ verwenden. Auf betroffenen Safari-/iOS-Versionen kann sie trotz korrekter PNG-, SVG- und Manifestdateien ein Buchstabenicon erzeugen. Das von GymPilot ausgelieferte Profil enthält das Hantelbild direkt und installiert einen entfernbaren Vollbild-Web-Clip. Es enthält keine Zertifikate, Passwörter, Trainingsdaten, Konten, VPN-Einstellungen oder Geräteeinschränkungen.
 
@@ -120,7 +124,7 @@ python3 skills/gym/scripts/gympilot.py exercise add 1 "Kniebeuge" --sets 3 --min
 python3 skills/gym/scripts/gympilot.py --json service install
 ```
 
-Die Web-App läuft anschließend standardmäßig unter <http://127.0.0.1:8765> oder nach einer expliziten privaten Installation unter der von `service status` ausgegebenen LAN-/VPN-Adresse. Für maschinenlesbare Ausgaben steht `--json` direkt vor dem jeweiligen Befehl.
+Die Web-App läuft anschließend standardmäßig unter `http://127.0.0.1:8765` oder nach einer expliziten privaten Installation unter der von `service status` ausgegebenen LAN-/VPN-Adresse. Für maschinenlesbare Ausgaben steht `--json` direkt vor dem jeweiligen Befehl.
 
 Die Erfassung von Einheiten, Sätzen, Gewichten und Wiederholungen erfolgt ausschließlich über Telegram/Hermes. Die Web-App ist eine reine Auswertungsoberfläche. Nach einem erfolgreichen Abruf speichert sie einen vollständigen, maximal 2 MB großen Auswertungs-Snapshot origin-lokal in IndexedDB, Cache Storage und zusätzlich als `localStorage`-Fallback. Der separate private Cache enthält ausschließlich diesen validierten Gesamtsnapshot; einzelne API-Antworten bleiben `no-store` und werden nie vom Service Worker gecacht. Ohne Serververbindung bleiben Plan, letzte Satzwerte, Verlauf und Kennzahlen mit einem sichtbaren Zeitstempel (`Offline · Stand …`) lesbar. Beim nächsten Online-Abruf wird der Snapshot vollständig ersetzt; es gibt keine Offline-Erfassung und keine Mutationswarteschlange. Bei aktiviertem Dashboard-Passwort werden keine Offline-Auswertungen gespeichert. Passwortschutz, Authentifizierungsfehler und Logout setzen vor dem Löschen eine nicht geheime lokale Sperrepoche. Alle drei Speicher verwenden epochenspezifische Schlüssel, damit ein älterer Safari-/PWA-Kontext einen neu autorisierten Snapshot weder überschreiben noch löschen kann. Ist der persistente Richtlinienspeicher nicht verfügbar, liest die App fail-closed keinen Offline-Snapshot.
 

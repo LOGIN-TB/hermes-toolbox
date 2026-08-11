@@ -16,7 +16,7 @@ Auf dem Rechner:
 
 Für einen dauerhaft gültigen Link sollte der Router der verwendeten Rechneradresse immer dieselbe IP zuweisen. GymPilot akzeptiert keine Wildcard-Bindung, öffentliche IP-Adresse, Portweiterleitung oder öffentlichen Tunnel.
 
-Die folgenden Beispiele verwenden `192.168.50.10`. Bei einer anderen privaten Adresse muss überall die tatsächlich installierte Adresse stehen.
+Die folgenden Beispiele verwenden `PRIVATE_IP`. Bei einer anderen privaten Adresse muss überall die tatsächlich installierte Adresse stehen.
 
 ## 1. GymPilot mit HTTPS installieren
 
@@ -24,7 +24,7 @@ Den Pfad zur installierten CLI bestimmen und den Dienst an die konkrete private 
 
 ```bash
 GYM_CLI="/pfad/zum/installierten/gym/scripts/gympilot.py"
-python3 "$GYM_CLI" --json service install --host 192.168.50.10 --https
+python3 "$GYM_CLI" --json service install --host PRIVATE_IP --https
 ```
 
 Die JSON-Ausgabe muss mindestens diese Werte enthalten:
@@ -34,9 +34,9 @@ Die JSON-Ausgabe muss mindestens diese Werte enthalten:
   "installed": true,
   "running": true,
   "healthy": true,
-  "url": "https://192.168.50.10:8765",
+  "url": "https://PRIVATE_IP:8765",
   "ca_certificate": "/lokaler/pfad/gympilot-local-ca.crt",
-  "webclip_profile_url": "https://192.168.50.10:8765/install/GymPilot-WebClip.mobileconfig"
+  "webclip_profile_url": "https://PRIVATE_IP:8765/install/GymPilot-WebClip.mobileconfig"
 }
 ```
 
@@ -54,9 +54,11 @@ GymPilot erzeugt für die konkrete private IP ein Serverzertifikat und eine loka
 
 Der private CA-Schlüssel bleibt auf dem Rechner. Er liegt im profilbezogenen TLS-Verzeichnis, wird von GymPilot nicht ausgeliefert und darf weder übertragen noch in ein Repository aufgenommen werden.
 
-Das öffentliche CA-Zertifikat über einen privaten Weg auf dem iPhone öffnen und die von iOS angezeigte Profilinstallation abschließen. Bezeichnungen und Position der Bestätigung können je nach iOS-Version und Geräteverwaltung abweichen. Maßgeblich ist die anschließende Prüfung in Safari:
+Das öffentliche CA-Zertifikat über einen privaten Weg auf dem iPhone öffnen und die von iOS angezeigte Profilinstallation abschließen. Bezeichnungen und Position der Bestätigung können je nach iOS-Version und Geräteverwaltung abweichen. Maßgeblich ist die anschließende Prüfung in Safari. Dazu den Wert `url` aus der eigenen JSON-Ausgabe öffnen; er hat die Form:
 
-[GymPilot im Beispielnetz öffnen](https://192.168.50.10:8765)
+```text
+https://PRIVATE_IP:8765
+```
 
 Safari muss die Seite ohne Zertifikatswarnung laden. Solange eine Warnung erscheint, nicht mit der Web-Clip-Installation fortfahren. Apples aktuelle Hinweise zum manuellen Vertrauen in Zertifikatsprofile stehen unter [Trust manually installed certificate profiles in iOS and iPadOS](https://support.apple.com/102390).
 
@@ -64,9 +66,11 @@ Safari muss die Seite ohne Zertifikatswarnung laden. Solange eine Warnung ersche
 
 Nicht Safaris Funktion „Zum Home-Bildschirm“ verwenden. Sie kann auf betroffenen Safari-/iOS-Versionen trotz korrekter Icondateien ein schwarzes oder graues Buchstabenicon erzeugen.
 
-Stattdessen die von `service install` oder `service status` ausgegebene `webclip_profile_url` direkt in Safari öffnen. Für die Beispieladresse lautet sie:
+Stattdessen die von `service install` oder `service status` ausgegebene `webclip_profile_url` direkt in Safari öffnen. Die Adresse hat die Form:
 
-[GymPilot-Web-Clip-Profil installieren](https://192.168.50.10:8765/install/GymPilot-WebClip.mobileconfig)
+```text
+https://PRIVATE_IP:8765/install/GymPilot-WebClip.mobileconfig
+```
 
 Der GymPilot-Server erzeugt dieses Profil im Speicher für seinen aktuellen HTTPS-Endpunkt. Es enthält:
 
@@ -132,7 +136,7 @@ Den Link direkt in Safari öffnen. Der integrierte GymPilot-Endpunkt liefert `ap
 
 ```bash
 curl --cacert "/pfad/gympilot-local-ca.crt" -I \
-  "https://192.168.50.10:8765/install/GymPilot-WebClip.mobileconfig"
+  "https://PRIVATE_IP:8765/install/GymPilot-WebClip.mobileconfig"
 ```
 
 Erwartet werden `200 OK`, `Content-Type: application/x-apple-aspen-config`, `Cache-Control: no-store` und `X-Content-Type-Options: nosniff`.
