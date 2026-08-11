@@ -1,8 +1,11 @@
 const $ = id => document.getElementById(id);
+const GYMPILOT_WEB_BUILD = 'diagnostic-v20';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 let displayUnits = 'metric';
 let dashboardData = null;
 let dashboardResult = null;
+let lastDashboardError = null;
+let lastOfflineStoreError = null;
 const dayNames = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
 const dayShort = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const number = (value, digits = 1) => new Intl.NumberFormat('de-DE', {maximumFractionDigits: digits}).format(Number(value) || 0);
@@ -32,13 +35,65 @@ const OFFLINE_SNAPSHOT_VERSION = 1;
 const OFFLINE_SNAPSHOT_MAX_BYTES = 2_000_000;
 
 function availablePolicyStorage() {
-  try { return globalThis.localStorage || null; }
+  try { return globalThis.localStorage ?? null; }
   catch (_error) { return null; }
 }
 
+function createCacheStorageDriver(cacheStorage) {
+  const cacheName = 'gympilot-private-dashboard-v1';
+  const requestKey = key => `/__gympilot_private_dashboard_snapshot__/${encodeURIComponent(key)}`;
+  return {
+    async get(key) {
+      const cache = await cacheStorage.open(cacheName);
+      const response = await cache.match(requestKey(key));
+      return response ? response.json() : null;
+    },
+    async put(key, value) {
+      const cache = await cacheStorage.open(cacheName);
+      await cache.put(requestKey(key), new Response(JSON.stringify(value), {
+        headers: {'Content-Type': 'application/json', 'Cache-Control': 'no-store'},
+      }));
+    },
+    async delete(key) {
+      const cache = await cacheStorage.open(cacheName);
+      await cache.delete(requestKey(key));
+    },
+  };
+}
+
+function createMirroredDashboardDriver(drivers) {
+  return {
+    async get(key) {
+      const outcomes = await Promise.allSettled(drivers.map(driver => driver.get(key)));
+      const candidates = outcomes
+        .filter(outcome => outcome.status === 'fulfilled' && validDashboardSnapshot(outcome.value, true))
+        .map(outcome => outcome.value);
+      if (candidates.length) return candidates.reduce((newest, candidate) => (
+        !newest || Date.parse(candidate.saved_at) > Date.parse(newest.saved_at) ? candidate : newest
+      ), null);
+      const errors = outcomes.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
+      if (errors.length === outcomes.length) throw new AggregateError(errors, 'Kein Offline-Speicher konnte gelesen werden.');
+      return null;
+    },
+    async put(key, value) {
+      const outcomes = await Promise.allSettled(drivers.map(driver => driver.put(key, value)));
+      if (outcomes.some(outcome => outcome.status === 'fulfilled')) return;
+      throw new AggregateError(outcomes.map(outcome => outcome.reason), 'Kein Offline-Speicher konnte beschrieben werden.');
+    },
+    async delete(key) {
+      const outcomes = await Promise.allSettled(drivers.map(driver => driver.delete(key)));
+      const errors = outcomes.filter(outcome => outcome.status === 'rejected').map(outcome => outcome.reason);
+      if (errors.length) throw new AggregateError(errors, 'Nicht alle Offline-Speicher konnten gelöscht werden.');
+    },
+  };
+}
+
 function createDashboardStore(driver, policyStorage = availablePolicyStorage()) {
-  const key = 'latest';
   const blockedKey = 'gympilot-dashboard-offline-blocked';
+  const allowedKey = 'gympilot-dashboard-offline-allowed';
+  const epochLabel = epoch => epoch === null ? 'initial' : String(epoch);
+  const storageKey = epoch => `latest:${epochLabel(epoch)}`;
+  const fallbackKey = epoch => `gympilot-dashboard-offline-snapshot:${epochLabel(epoch)}`;
   let blocked = false;
   let generation = 0;
   let mutationTail = Promise.resolve();
@@ -49,57 +104,161 @@ function createDashboardStore(driver, policyStorage = availablePolicyStorage()) 
   };
   const isBlocked = () => {
     if (blocked) return true;
-    try { return policyStorage?.getItem(blockedKey) === '1'; }
+    if (!policyStorage) return true;
+    try { return policyStorage.getItem(blockedKey) !== policyStorage.getItem(allowedKey); }
     catch (_error) { return true; }
+  };
+  const policyEpoch = () => {
+    if (!policyStorage) return undefined;
+    try { return policyStorage.getItem(blockedKey) ?? null; }
+    catch (_error) { return undefined; }
   };
   return {
     generation: () => generation,
+    policyEpoch,
+    async diagnostics() {
+      const report = {policy_storage: Boolean(policyStorage), blocked: true};
+      if (!policyStorage) return report;
+      try {
+        const blockEpoch = policyStorage.getItem(blockedKey);
+        const allowEpoch = policyStorage.getItem(allowedKey);
+        report.block_epoch = blockEpoch;
+        report.allow_epoch = allowEpoch;
+        report.blocked = blockEpoch !== allowEpoch;
+        const epoch = blockEpoch ?? null;
+        const key = storageKey(epoch);
+        const localFallbackKey = fallbackKey(epoch);
+        report.storage_key = key;
+        try {
+          const primary = await driver.get(key);
+          report.primary = {
+            present: Boolean(primary), valid: validDashboardSnapshot(primary, true),
+            saved_at: primary?.saved_at ?? null, plans: primary?.today?.plan?.length ?? null,
+          };
+        } catch (error) { report.primary = {error: `${error?.name || 'Error'}: ${error?.message || error}`}; }
+        try {
+          const raw = policyStorage.getItem(localFallbackKey);
+          const fallback = raw ? JSON.parse(raw) : null;
+          report.local_fallback = {
+            present: Boolean(raw), bytes: raw?.length ?? 0, valid: validDashboardSnapshot(fallback, true),
+            saved_at: fallback?.saved_at ?? null, plans: fallback?.today?.plan?.length ?? null,
+          };
+        } catch (error) { report.local_fallback = {error: `${error?.name || 'Error'}: ${error?.message || error}`}; }
+      } catch (error) { report.policy_error = `${error?.name || 'Error'}: ${error?.message || error}`; }
+      return report;
+    },
+    allowWrites(expectedEpoch) {
+      return enqueueMutation(async () => {
+        if (!policyStorage || expectedEpoch === undefined) throw new Error('Persistenter Richtlinienspeicher ist nicht verfügbar.');
+        const currentEpoch = policyStorage.getItem(blockedKey);
+        if (currentEpoch !== expectedEpoch) throw new Error('Dashboard-Abruf wurde durch eine neuere Sperre ungültig.');
+        if (currentEpoch === null) policyStorage.removeItem(allowedKey);
+        else policyStorage.setItem(allowedKey, currentEpoch);
+        if (policyStorage.getItem(blockedKey) !== policyStorage.getItem(allowedKey)) {
+          blocked = true;
+          throw new Error('Dashboard-Abruf wurde durch eine neuere Sperre ungültig.');
+        }
+        blocked = false;
+        generation += 1;
+        return {generation, policyEpoch: currentEpoch};
+      });
+    },
     async read() {
       const startedAt = generation;
       if (isBlocked()) return null;
-      const snapshot = await driver.get(key);
-      return startedAt === generation && !isBlocked() ? snapshot : null;
+      const startedEpoch = policyEpoch();
+      if (startedEpoch === undefined) return null;
+      const key = storageKey(startedEpoch);
+      const localFallbackKey = fallbackKey(startedEpoch);
+      let primarySnapshot = null;
+      let fallbackSnapshot = null;
+      let primaryError = null;
+      let fallbackError = null;
+      try { primarySnapshot = await driver.get(key); }
+      catch (error) { primaryError = error; }
+      try {
+        const raw = policyStorage.getItem(localFallbackKey);
+        if (raw) fallbackSnapshot = JSON.parse(raw);
+      } catch (error) { fallbackError = error; }
+      const candidates = [primarySnapshot, fallbackSnapshot].filter(candidate => validDashboardSnapshot(candidate, true));
+      const snapshot = candidates.reduce((newest, candidate) => (
+        !newest || Date.parse(candidate.saved_at) > Date.parse(newest.saved_at) ? candidate : newest
+      ), null);
+      if (!snapshot) {
+        if (primaryError && fallbackError) throw new AggregateError([primaryError, fallbackError], 'Offline-Snapshot konnte nicht gelesen werden.');
+        if (primaryError) throw primaryError;
+        if (fallbackError) throw fallbackError;
+      }
+      return startedAt === generation && policyEpoch() === startedEpoch && !isBlocked() ? snapshot : null;
     },
-    write(snapshot, expectedGeneration = generation) {
-      const bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
+    write(snapshot, expectedAuthorization = {generation, policyEpoch: policyEpoch()}) {
+      const serialized = JSON.stringify(snapshot);
+      const bytes = new TextEncoder().encode(serialized).byteLength;
       if (bytes > OFFLINE_SNAPSHOT_MAX_BYTES) return Promise.reject(new Error('Offline-Snapshot ist zu groß.'));
-      const startedAt = expectedGeneration;
+      const startedAt = typeof expectedAuthorization === 'object' ? expectedAuthorization.generation : expectedAuthorization;
+      const authorizedEpoch = typeof expectedAuthorization === 'object' ? expectedAuthorization.policyEpoch : policyEpoch();
+      const key = storageKey(authorizedEpoch);
+      const localFallbackKey = fallbackKey(authorizedEpoch);
       return enqueueMutation(async () => {
-        if (startedAt !== generation) throw new Error('Offline-Snapshot wurde durch eine neuere Sperre ungültig.');
-        await driver.put(key, snapshot);
-        if (startedAt !== generation) {
+        if (authorizedEpoch === undefined || startedAt !== generation || policyEpoch() !== authorizedEpoch || isBlocked()) {
+          throw new Error('Offline-Snapshot wurde durch eine neuere Sperre ungültig.');
+        }
+        let primaryError = null;
+        let fallbackError = null;
+        try { await driver.put(key, snapshot); }
+        catch (error) { primaryError = error; }
+        try {
+          if (policyStorage) policyStorage.setItem(localFallbackKey, serialized);
+          else fallbackError = new Error('Lokaler Fallback-Speicher ist nicht verfügbar.');
+        } catch (error) { fallbackError = error; }
+        if (primaryError && fallbackError) {
+          throw new AggregateError([primaryError, fallbackError], 'Offline-Snapshot konnte nicht gespeichert werden.');
+        }
+        if (startedAt !== generation || policyEpoch() !== authorizedEpoch || isBlocked()) {
           try { await driver.delete(key); }
           catch (cleanupError) {
             throw new AggregateError([cleanupError], 'Ungültiger Offline-Snapshot konnte nicht entfernt werden.');
           }
+          try { policyStorage?.removeItem(localFallbackKey); }
+          catch (_error) {}
           throw new Error('Offline-Snapshot wurde durch eine neuere Sperre ungültig.');
-        }
-        try { policyStorage?.removeItem(blockedKey); }
-        catch (error) {
-          blocked = true;
-          throw new AggregateError([error], 'Offline-Sperrmarke konnte nicht aufgehoben werden.');
         }
         blocked = false;
       });
     },
     clear() {
+      const clearedEpoch = policyEpoch();
+      const key = storageKey(clearedEpoch ?? null);
+      const localFallbackKey = fallbackKey(clearedEpoch ?? null);
       generation += 1;
       blocked = true;
       let markerError = null;
       try {
-        if (policyStorage) policyStorage.setItem(blockedKey, '1');
+        if (policyStorage) policyStorage.setItem(blockedKey, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
         else markerError = new Error('Persistenter Richtlinienspeicher ist nicht verfügbar.');
       } catch (error) { markerError = error; }
       return enqueueMutation(async () => {
+        let fallbackDeleteError = null;
+        if (!policyStorage) fallbackDeleteError = new Error('Lokaler Fallback-Speicher ist nicht verfügbar.');
+        else {
+          try { policyStorage.removeItem(localFallbackKey); }
+          catch (error) { fallbackDeleteError = error; }
+        }
         try { await driver.delete(key); }
         catch (deleteError) {
-          if (markerError) {
+          if (markerError || fallbackDeleteError) {
             throw new AggregateError(
-              [markerError, deleteError],
+              [markerError, fallbackDeleteError, deleteError].filter(Boolean),
               'Sperrmarke konnte nicht gespeichert und Snapshot nicht durch Löschen invalidiert werden.',
             );
           }
           throw deleteError;
+        }
+        if (fallbackDeleteError) {
+          if (markerError) {
+            throw new AggregateError([markerError, fallbackDeleteError], 'Sperrmarke und lokaler Fallback konnten nicht gelöscht werden.');
+          }
+          throw fallbackDeleteError;
         }
       });
     },
@@ -139,7 +298,9 @@ function createIndexedDbDriver(factory) {
   };
 }
 
-const dashboardStore = createDashboardStore(createIndexedDbDriver(globalThis.indexedDB));
+const dashboardDrivers = [createIndexedDbDriver(globalThis.indexedDB)];
+if (globalThis.caches) dashboardDrivers.push(createCacheStorageDriver(globalThis.caches));
+const dashboardStore = createDashboardStore(createMirroredDashboardDriver(dashboardDrivers));
 
 async function clearDashboardSnapshot(store = dashboardStore) {
   await store.clear();
@@ -202,11 +363,12 @@ function validDashboardSnapshot(snapshot, allowProtected = false) {
 }
 
 function isNetworkFailure(error) {
-  return error instanceof TypeError && !Object.hasOwn(error, 'status');
+  return (error instanceof TypeError && !Object.hasOwn(error, 'status')) || error?.name === 'AbortError';
 }
 
 async function resolveDashboardSnapshot(fetchLive, store, clock = () => new Date()) {
   const startedAt = store.generation?.();
+  const startedPolicyEpoch = store.policyEpoch?.();
   try {
     const live = await fetchLive();
     if (startedAt !== undefined && startedAt !== store.generation() && !live.health?.auth_required) {
@@ -216,8 +378,14 @@ async function resolveDashboardSnapshot(fetchLive, store, clock = () => new Date
     if (!validDashboardSnapshot(snapshot, true)) throw new Error('Ungültige Dashboard-Daten.');
     try {
       if (snapshot.health.auth_required) await store.clear();
-      else await store.write(snapshot, startedAt);
+      else {
+        const writeGeneration = store.allowWrites ? await store.allowWrites(startedPolicyEpoch) : startedAt;
+        await store.write(snapshot, writeGeneration);
+        lastOfflineStoreError = null;
+      }
     } catch (cacheError) {
+      lastOfflineStoreError = `${cacheError?.name || 'Error'}: ${cacheError?.message || cacheError}`;
+      if (cacheError?.message?.includes('neuere Sperre')) throw cacheError;
       console.warn('Offline-Snapshot konnte nicht gespeichert werden.', cacheError);
     }
     return {snapshot, offline: false};
@@ -250,11 +418,27 @@ function updateDashboardStatus(result) {
   $('healthDot').classList.toggle('offline', offline);
 }
 
-async function fetchLiveDashboard(client = api, store = dashboardStore) {
-  const health = await client('/api/health');
+function fetchDashboardWithTimeout(fetchLive, timeoutMs = 6000) {
+  const controller = new AbortController();
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      const error = new Error('Dashboard-Abruf hat das Zeitlimit überschritten.');
+      error.name = 'AbortError';
+      controller.abort();
+      reject(error);
+    }, timeoutMs);
+    Promise.resolve()
+      .then(() => fetchLive(controller.signal))
+      .then(resolve, reject)
+      .finally(() => clearTimeout(timeout));
+  });
+}
+
+async function fetchLiveDashboard(client = api, store = dashboardStore, signal = undefined) {
+  const health = await client('/api/health', {signal});
   if (health.auth_required) await store.clear();
-  const [today, overview] = await Promise.all([client('/api/today'), client('/api/overview')]);
-  const details = await Promise.all(today.plan.map(routine => client(`/api/today?routine=${routine.id}`)));
+  const [today, overview] = await Promise.all([client('/api/today', {signal}), client('/api/overview', {signal})]);
+  const details = await Promise.all(today.plan.map(routine => client(`/api/today?routine=${routine.id}`, {signal})));
   const routines = Object.fromEntries(today.plan.map((routine, index) => [String(routine.id), details[index]]));
   return {health, today, overview, routines};
 }
@@ -358,11 +542,76 @@ function renderDashboard(health, today, overview, routines = {}) {
 }
 
 async function loadDashboard() {
-  const result = await resolveDashboardSnapshot(fetchLiveDashboard, dashboardStore);
-  dashboardResult = result;
-  const {health, today, overview, routines} = result.snapshot;
-  renderDashboard(health, today, overview, routines);
-  updateDashboardStatus(result);
+  try {
+    const result = await resolveDashboardSnapshot(
+      () => fetchDashboardWithTimeout(signal => fetchLiveDashboard(api, dashboardStore, signal)),
+      dashboardStore,
+    );
+    dashboardResult = result;
+    const {health, today, overview, routines} = result.snapshot;
+    renderDashboard(health, today, overview, routines);
+    updateDashboardStatus(result);
+    lastDashboardError = null;
+    return result;
+  } catch (error) {
+    lastDashboardError = `${error?.name || 'Error'}: ${error?.message || error}`;
+    throw error;
+  }
+}
+
+async function collectGymPilotDiagnostics() {
+  const report = {
+    build: GYMPILOT_WEB_BUILD,
+    generated_at: new Date().toISOString(),
+    href: location.href,
+    origin: location.origin,
+    secure_context: globalThis.isSecureContext,
+    online: navigator.onLine,
+    standalone_media: globalThis.matchMedia?.('(display-mode: standalone)')?.matches ?? null,
+    navigator_standalone: navigator.standalone ?? null,
+    user_agent: navigator.userAgent,
+    last_dashboard_error: lastDashboardError,
+    last_offline_store_error: lastOfflineStoreError,
+    dashboard_result: dashboardResult ? {offline: dashboardResult.offline, saved_at: dashboardResult.snapshot?.saved_at ?? null, plans: dashboardResult.snapshot?.today?.plan?.length ?? null} : null,
+    store: await dashboardStore.diagnostics(),
+  };
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration();
+    report.service_worker = {
+      controller: navigator.serviceWorker?.controller?.scriptURL ?? null,
+      active: registration?.active?.scriptURL ?? null,
+      active_state: registration?.active?.state ?? null,
+      waiting: registration?.waiting?.scriptURL ?? null,
+      installing: registration?.installing?.scriptURL ?? null,
+    };
+  } catch (error) { report.service_worker = {error: `${error?.name || 'Error'}: ${error?.message || error}`}; }
+  try {
+    report.cache_names = await globalThis.caches?.keys() ?? null;
+    if (globalThis.caches) {
+      const privateCache = await globalThis.caches.open('gympilot-private-dashboard-v1');
+      const requests = await privateCache.keys();
+      report.private_cache = [];
+      for (const request of requests) {
+        const response = await privateCache.match(request);
+        let snapshot = null;
+        try { snapshot = response ? await response.clone().json() : null; } catch (_error) {}
+        report.private_cache.push({
+          path: new URL(request.url).pathname,
+          present: Boolean(response), valid: validDashboardSnapshot(snapshot, true),
+          saved_at: snapshot?.saved_at ?? null, plans: snapshot?.today?.plan?.length ?? null,
+        });
+      }
+    }
+  } catch (error) { report.cache_error = `${error?.name || 'Error'}: ${error?.message || error}`; }
+  return report;
+}
+
+async function showDiagnostics() {
+  const dialog = $('diagnostics');
+  $('diagnosticsOutput').textContent = 'Diagnose wird geladen …';
+  dialog.showModal();
+  try { $('diagnosticsOutput').textContent = JSON.stringify(await collectGymPilotDiagnostics(), null, 2); }
+  catch (error) { $('diagnosticsOutput').textContent = `${error?.name || 'Error'}: ${error?.message || error}`; }
 }
 
 function showUnavailable() {
@@ -393,7 +642,8 @@ async function init() {
     dashboardResult = {...dashboardResult, offline: true};
     updateDashboardStatus(dashboardResult);
   });
-  $('dataStatus').addEventListener('click', () => loadDashboard().catch(error => console.error(error)));
+  $('dataStatus').addEventListener('click', () => showDiagnostics());
+  $('refreshDashboard').addEventListener('click', event => { event.preventDefault(); loadDashboard().then(showDiagnostics).catch(showDiagnostics); });
   window.addEventListener('online', () => loadDashboard().catch(error => console.error(error)));
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) loadDashboard().catch(error => console.error(error));

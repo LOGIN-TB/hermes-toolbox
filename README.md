@@ -55,13 +55,31 @@ python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service install
 python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service status
 ```
 
-Für den ausdrücklich gewünschten Zugriff im privaten LAN wird ausschließlich die konkrete Interfaceadresse verwendet:
+Für den Zugriff vom iPhone wird GymPilot ausschließlich an eine konkrete private LAN-/VPN-Adresse gebunden und mit HTTPS installiert:
 
 ```bash
-python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service install --host 192.168.50.10
+python3 "/pfad/zum/installierten/gym/scripts/gympilot.py" --json service install --host 192.168.50.10 --https
 ```
 
-`0.0.0.0`, `::`, öffentliche Adressen, Tunnel und Router-Portweiterleitungen werden nicht unterstützt. Der eingebaute HTTP-Server verschlüsselt den LAN-Verkehr nicht. Ohne über `security enable` lokal im Terminal aktivierten Passwortschutz können alle Geräte im selben Netz die Trainingsauswertung lesen.
+`--https` erzeugt profilintern eine private GymPilot-CA und ein Serverzertifikat mit der konkreten LAN-IP als Subject Alternative Name. Die JSON-Ausgabe nennt:
+
+- `url`: Adresse des Dashboards
+- `ca_certificate`: öffentliches CA-Zertifikat für das eigene Telefon
+- `webclip_profile_url`: anklickbares Apple-Web-Clip-Profil mit eingebettetem Hantelicon
+
+Nur das öffentliche CA-Zertifikat darf auf das eigene Telefon übertragen werden. Der private CA-Schlüssel bleibt auf dem Rechner und gehört weder in eine Nachricht noch in ein Repository. Safari muss die Dashboard-URL anschließend ohne Zertifikatswarnung laden.
+
+Für die Beispieladresse ist der Installationslink:
+
+[GymPilot-Web-Clip-Profil installieren](https://192.168.50.10:8765/install/GymPilot-WebClip.mobileconfig)
+
+Nicht Safaris Funktion „Zum Home-Bildschirm“ verwenden. Auf betroffenen Safari-/iOS-Versionen kann sie trotz korrekter PNG-, SVG- und Manifestdateien ein Buchstabenicon erzeugen. Das von GymPilot ausgelieferte Profil enthält das Hantelbild direkt und installiert einen entfernbaren Vollbild-Web-Clip. Es enthält keine Zertifikate, Passwörter, Trainingsdaten, Konten, VPN-Einstellungen oder Geräteeinschränkungen.
+
+Die vollständige Anleitung beschreibt Zertifikatsübertragung, Profilprüfung, ersten Online-Start, Offline-Kaltstart, Aktualisierung, Fehlerbehebung und Rücknahme:
+
+**[GymPilot auf einem iPhone installieren](docs/gympilot-iphone-installation.md)**
+
+`0.0.0.0`, `::`, öffentliche Adressen, Tunnel und Router-Portweiterleitungen werden nicht unterstützt. Ohne `--https` bleibt der LAN-Verkehr unverschlüsselt und der Offline-Kaltstart einer PWA funktioniert dort nicht.
 
 Der Service startet das lokale Dashboard unabhängig vom Gateway. Ein `/restart` des Hermes-Gateways beendet die Weboberfläche deshalb nicht mehr. Ein echter Dashboard-Absturz wird beim nächsten `/gym`-Status erkannt und kontrolliert über `service restart` behoben; der Service erzeugt bewusst keine unbegrenzte Crash-Schleife.
 
@@ -104,9 +122,9 @@ python3 skills/gym/scripts/gympilot.py --json service install
 
 Die Web-App läuft anschließend standardmäßig unter <http://127.0.0.1:8765> oder nach einer expliziten privaten Installation unter der von `service status` ausgegebenen LAN-/VPN-Adresse. Für maschinenlesbare Ausgaben steht `--json` direkt vor dem jeweiligen Befehl.
 
-Die Erfassung von Einheiten, Sätzen, Gewichten und Wiederholungen erfolgt ausschließlich über Telegram/Hermes. Die Web-App ist eine reine Auswertungsoberfläche. Nach einem erfolgreichen Abruf speichert sie einen vollständigen, maximal 2 MB großen Auswertungs-Snapshot in IndexedDB. Ohne Serververbindung bleiben Plan, letzte Satzwerte, Verlauf und Kennzahlen mit einem sichtbaren Zeitstempel (`Offline · Stand …`) lesbar. Beim nächsten Online-Abruf wird der Snapshot vollständig ersetzt; es gibt keine Offline-Erfassung und keine Mutationswarteschlange. Bei aktiviertem Dashboard-Passwort werden keine Offline-Auswertungen gespeichert. Passwortschutz, Authentifizierungsfehler und Logout setzen vor dem Löschen zusätzlich eine nicht geheime lokale Sperrmarke. Verweigert der Browser sowohl diese Markierung als auch das Löschen aus IndexedDB, meldet die App einen Sicherheitsfehler; für einen solchen vollständigen Speicherausfall kann sie keinen Neustartschutz zusichern.
+Die Erfassung von Einheiten, Sätzen, Gewichten und Wiederholungen erfolgt ausschließlich über Telegram/Hermes. Die Web-App ist eine reine Auswertungsoberfläche. Nach einem erfolgreichen Abruf speichert sie einen vollständigen, maximal 2 MB großen Auswertungs-Snapshot origin-lokal in IndexedDB, Cache Storage und zusätzlich als `localStorage`-Fallback. Der separate private Cache enthält ausschließlich diesen validierten Gesamtsnapshot; einzelne API-Antworten bleiben `no-store` und werden nie vom Service Worker gecacht. Ohne Serververbindung bleiben Plan, letzte Satzwerte, Verlauf und Kennzahlen mit einem sichtbaren Zeitstempel (`Offline · Stand …`) lesbar. Beim nächsten Online-Abruf wird der Snapshot vollständig ersetzt; es gibt keine Offline-Erfassung und keine Mutationswarteschlange. Bei aktiviertem Dashboard-Passwort werden keine Offline-Auswertungen gespeichert. Passwortschutz, Authentifizierungsfehler und Logout setzen vor dem Löschen eine nicht geheime lokale Sperrepoche. Alle drei Speicher verwenden epochenspezifische Schlüssel, damit ein älterer Safari-/PWA-Kontext einen neu autorisierten Snapshot weder überschreiben noch löschen kann. Ist der persistente Richtlinienspeicher nicht verfügbar, liest die App fail-closed keinen Offline-Snapshot.
 
-Browser behandeln Loopback als sicheren Kontext; dort kann der Service Worker registriert werden. Ein Telefonzugriff auf eine private LAN- oder VPN-Adresse über das eingebaute HTTP ist dagegen nur ein mobiles Web-Dashboard: Browser installieren daraus üblicherweise keine PWA. Für eine Installation auf dem Telefon ist zusätzlich ein privat betriebener, vom Telefon als vertrauenswürdig eingestufter HTTPS-Endpunkt erforderlich. GymPilot bringt bewusst keinen TLS- oder öffentlichen Tunnelbetrieb mit.
+Browser behandeln Loopback als sicheren Kontext; dort kann der Service Worker registriert werden. Für ein Telefon im privaten LAN richtet `service install --host PRIVATE_IP --https` einen lokalen HTTPS-Endpunkt ein. Nach einmaligem Vertrauen der ausgegebenen CA kann der Browser den Service Worker registrieren und den App-Rahmen für Offline-Kaltstarts speichern. Ein HTTP-LAN-Endpunkt bleibt nur ein mobiles Web-Dashboard ohne verlässlichen Offline-Kaltstart.
 
 Häufig verwendete Befehle:
 
@@ -206,7 +224,7 @@ Die CI führt diese Prüfungen mit Python 3.11, 3.12 und 3.13 aus. Der Node-Test
 
 GymPilot enthält keine Analysefunktionen, Cloud-Synchronisierung, Telemetrie oder externen Laufzeitdateien. Datenbank, Exporte und Sicherungen können persönliche Trainingsdaten enthalten. Sie gehören nicht in öffentliche Synchronisationsordner. Laufzeitdaten werden nie im Skillverzeichnis gespeichert. Unter POSIX werden private Verzeichnisse mit `0700` und Datendateien mit `0600` angelegt. Export und Backup schreiben ausschließlich in zufällig benannte Unterpfade des Profilverzeichnisses; Symlink-Pfade werden abgelehnt.
 
-Der Server bindet standardmäßig nur an Loopback. Wildcard- und öffentlich routbare Adressen werden abgelehnt; für LAN oder VPN muss eine konkrete private Adresse angegeben werden. Der Host-Header muss zur konfigurierten Adresse passen. JSON-Anfragen sind größenbegrenzt. Diese Schutzmaßnahmen ersetzen keine Firewall. Portweiterleitungen und öffentliche Tunnel werden nicht unterstützt. Im LAN läuft HTTP unverschlüsselt; außerhalb des Geräts sollte ein vertrauenswürdiges VPN verwendet werden.
+Der Server bindet standardmäßig nur an Loopback. Wildcard- und öffentlich routbare Adressen werden abgelehnt; für LAN oder VPN muss eine konkrete private Adresse angegeben werden. Der Host-Header muss zur konfigurierten Adresse passen. JSON-Anfragen sind größenbegrenzt. Diese Schutzmaßnahmen ersetzen keine Firewall. Portweiterleitungen und öffentliche Tunnel werden nicht unterstützt. Für mobile PWA- und Offline-Nutzung ist `--https` erforderlich; ohne diese Option läuft LAN-Zugriff weiterhin unverschlüsselt.
 
 Die Authentifizierung speichert nur Salt und Passwort-Hash: `scrypt`, soweit die Python-Installation es unterstützt, sonst PBKDF2-HMAC-SHA256 mit 600.000 Iterationen. Sitzungstokens werden zufällig erzeugt und nur gehasht in SQLite gespeichert. Cookies sind `HttpOnly` und `SameSite=Strict`. Weitere Angaben stehen in [SECURITY.md](SECURITY.md).
 

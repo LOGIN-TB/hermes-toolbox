@@ -1,7 +1,7 @@
 ---
 name: gym
 description: Lokale Trainingspläne importieren oder manuell pflegen und Training protokollieren.
-version: 0.1.0-alpha.9
+version: 0.1.0-alpha.10
 author: LOGIN-TB contributors
 license: MIT
 platforms: [linux, macos]
@@ -14,7 +14,7 @@ metadata:
 
 GymPilot speichert Trainingspläne und Trainingsdaten ausschließlich lokal unter `${HERMES_HOME:-~/.hermes}/gympilot`. Führe die mitgelieferte [CLI](scripts/gympilot.py) mit Python 3.11 oder neuer aus und verwende für Hermes immer `--json`. Das Kompatibilitätsmodul [gympilot_generator.py](scripts/gympilot_generator.py) wird für historische Alpha-Entwürfe mitinstalliert, darf aber nicht als Setup-Weg angeboten werden. Den Installationspfad aus dem geladenen Skill ableiten; niemals ein Home-Verzeichnis oder IDs erfinden.
 
-Zur vollständig lokalen Web-App gehören [HTML](assets/web/index.html), [JavaScript](assets/web/app.js), [Styles](assets/web/styles.css), [Manifest](assets/web/manifest.webmanifest), [Service Worker](assets/web/service-worker.js), [192-Pixel-Icon](assets/web/icons/icon-192.png), [512-Pixel-Icon](assets/web/icons/icon-512.png), [Apple-Touch-Icon](assets/web/icons/apple-touch-icon.png), [Favicon](assets/web/icons/favicon-32.png) und [SVG-Icon](assets/web/icons/icon.svg). Diese Dateien sind erforderliche Bestandteile der Direktinstallation; keine CDN- oder Cloud-Ressourcen nachladen.
+Zur vollständig lokalen Web-App gehören [HTML](assets/web/index.html), [JavaScript](assets/web/app.js), [Styles](assets/web/styles.css), [Manifest](assets/web/manifest.webmanifest), [Service Worker](assets/web/service-worker.js), [192-Pixel-Icon](assets/web/icons/icon-192.png), [512-Pixel-Icon](assets/web/icons/icon-512.png), [Apple-Touch-Icon](assets/web/icons/apple-touch-icon.png), [iOS-Root-Icon](assets/web/apple-touch-icon.png), [iOS-Precomposed-Icon](assets/web/apple-touch-icon-precomposed.png), [v20-192-Pixel-Icon](assets/web/icons/icon-192-v20.png), [v20-512-Pixel-Icon](assets/web/icons/icon-512-v20.png), [v20-iOS-Root-Icon](assets/web/apple-touch-icon-v20.png), [v20-iOS-Precomposed-Icon](assets/web/apple-touch-icon-precomposed-v20.png), [ICO-Favicon](assets/web/favicon.ico), [PNG-Favicon](assets/web/icons/favicon-32.png) und [SVG-Icon](assets/web/icons/icon.svg). Die Home-Screen-PNGs müssen opak sein. Diese Dateien sind erforderliche Bestandteile der Direktinstallation; keine CDN- oder Cloud-Ressourcen nachladen.
 
 ```bash
 GYM_CLI="<installiertes-skill-verzeichnis>/scripts/gympilot.py"
@@ -43,7 +43,7 @@ Den Dashboard-Service bei jedem `/gym`-Einstieg über `service status` prüfen. 
 python3 "$GYM_CLI" --json service install
 ```
 
-Loopback ist der sichere Standard. Wird Zugriff aus dem lokalen Netz ausdrücklich verlangt, zuerst die konkrete private Interfaceadresse ermitteln und nach Bestätigung gezielt installieren, beispielsweise `python3 "$GYM_CLI" --json service install --host 192.168.50.10`. Niemals `0.0.0.0`, `::`, öffentliche IP-Adressen, Tunnel oder Router-Portweiterleitungen verwenden. Darauf hinweisen, dass HTTP unverschlüsselt ist und ohne aktivierten Passwortschutz jedes Gerät im selben Netz die Trainingsauswertung lesen kann. Passwörter niemals im Chat erfassen; `security enable` darf nur interaktiv in einem lokalen Terminal laufen.
+Loopback ist der sichere Standard. Wird Zugriff aus dem lokalen Netz ausdrücklich verlangt, zuerst die konkrete private Interfaceadresse ermitteln und nach Bestätigung gezielt installieren. Für eine mobile PWA mit Offline-Kaltstart immer HTTPS verwenden: `python3 "$GYM_CLI" --json service install --host 192.168.50.10 --https`. Die Ausgabe nennt `ca_certificate`, `url` und `webclip_profile_url`. Ausschließlich das öffentliche CA-Zertifikat darf an das eigene Telefon übertragen werden; der private CA-Schlüssel bleibt geschützt auf dem Rechner. Safari muss `url` anschließend ohne Zertifikatswarnung öffnen. Die iPhone-App nicht über Safaris „Zum Home-Bildschirm“ installieren, weil betroffene Safari-/iOS-Versionen dabei trotz korrekter Webicons ein Buchstabenicon erzeugen können. Stattdessen `webclip_profile_url` direkt in Safari öffnen und vor der Installation prüfen, dass das Profil genau einen entfernbaren GymPilot-Web-Clip enthält. Das Profil bettet die Hantel ein und enthält weder Zertifikate noch Passwörter, Trainingsdaten, Konten, VPN-Einstellungen oder Geräteeinschränkungen. Nach der Installation GymPilot einmal online vollständig laden und erst danach den Offline-Kaltstart auf einem realen iPhone prüfen. Ohne `--https` ist ein LAN-Zugriff nur ein unverschlüsseltes Web-Dashboard ohne verlässlichen Offline-Kaltstart. Niemals `0.0.0.0`, `::`, öffentliche IP-Adressen, Tunnel oder Router-Portweiterleitungen verwenden. Passwörter niemals im Chat erfassen; `security enable` darf nur interaktiv in einem lokalen Terminal laufen.
 
 Unter Linux prüft `service status` beziehungsweise `service install` zuerst den `systemd --user`-Manager und setzt für alle Manageraufrufe automatisch `XDG_RUNTIME_DIR=/run/user/UID` sowie `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/UID/bus`. Ist der User-Manager auf einem headless Server nicht verfügbar, die vollständige CLI-Fehlermeldung mit Benutzer, UID und Reparaturbefehlen wiedergeben. Vor `loginctl enable-linger BENUTZER` ausdrücklich erklären, dass damit der User-Manager dauerhaft ohne Login laufen darf, und die Zustimmung einholen. Erst danach darf ein Administrator Linger aktivieren und `systemctl start user@UID.service` starten. Anschließend `service install` erneut ausführen und `installed`, `running` und `healthy` prüfen. Linger niemals still aktivieren und niemals einen transienten Hintergrundprozess als Persistenz-Ersatz starten. Jede installierte Python-Version ab 3.11 ist zulässig; Python 3.13 benötigt kein zusätzliches `python3.11`.
 
@@ -106,7 +106,8 @@ Vor jedem Schreibvorgang Übung, Gewicht, Einheit und Wiederholungen eindeutig b
 ## Dashboard, Export, Backup und Sicherheit
 
 - Dashboard persistent installieren: `python3 "$GYM_CLI" --json service install`
-- Dashboard gezielt im privaten LAN installieren: `python3 "$GYM_CLI" --json service install --host PRIVATE_IP`
+- Dashboard gezielt als mobile Offline-PWA im privaten LAN installieren: `python3 "$GYM_CLI" --json service install --host PRIVATE_IP --https`
+- iPhone-Web-Clip: die danach ausgegebene `webclip_profile_url` direkt in Safari öffnen; nicht „Zum Home-Bildschirm“ verwenden
 - Dashboard prüfen: `python3 "$GYM_CLI" --json service status`
 - Dashboard neu starten: `python3 "$GYM_CLI" --json service restart`
 - Dashboard-Service entfernen: `python3 "$GYM_CLI" --json service uninstall`
@@ -115,7 +116,7 @@ Vor jedem Schreibvorgang Übung, Gewicht, Einheit und Wiederholungen eindeutig b
 - Backup: `... --json backup`
 - Status: `... --json status`
 
-Die Erfassung erfolgt ausschließlich im Telegram-/Hermes-Dialog. Die Web-App ist read-only und dient nur der Auswertung. Sie darf keine Einheit und keinen Satz starten, ändern, beenden oder zur späteren Synchronisation vormerken. Bei ungeschütztem Dashboard speichert sie nach einem vollständigen erfolgreichen Abruf einen privaten IndexedDB-Snapshot und zeigt ihn ohne Serververbindung mit Zeitstempel an. Bei aktiviertem Dashboard-Passwort wird kein Snapshot gespeichert; Authentifizierungsfehler und Logout sperren ihn vor dem Löschversuch durch eine nicht geheime lokale Sperrmarke. Scheitern Marker und Löschung gleichzeitig, muss die App fail-closed einen Sicherheitsfehler melden. Private API-Antworten dürfen niemals im HTTP- oder Service-Worker-Cache landen.
+Die Erfassung erfolgt ausschließlich im Telegram-/Hermes-Dialog. Die Web-App ist read-only und dient nur der Auswertung. Sie darf keine Einheit und keinen Satz starten, ändern, beenden oder zur späteren Synchronisation vormerken. Bei ungeschütztem Dashboard speichert sie nach einem vollständigen erfolgreichen Abruf einen privaten origin-lokalen Gesamtsnapshot gespiegelt in IndexedDB, einem separaten Cache Storage und `localStorage` und zeigt ihn ohne Serververbindung mit Zeitstempel an. Bei aktiviertem Dashboard-Passwort wird kein Snapshot gespeichert; Authentifizierungsfehler und Logout setzen eine nicht geheime Sperrepoche. Block- und Freigabeepoche sowie epochenspezifische Speicher-Keys verhindern, dass ältere Browser-/PWA-Kontexte neu autorisierte Kopien überschreiben oder löschen. Ohne verfügbaren Richtlinienspeicher darf kein Offline-Snapshot gelesen werden. Einzelne private API-Antworten dürfen niemals im HTTP- oder Service-Worker-Cache landen.
 
 Nur konkrete Loopback-, LAN- oder VPN-Adressen verwenden; niemals Wildcards, öffentliche Tunnel oder Portweiterleitungen. Exporte und Backups sind privat und dürfen nur nach ausdrücklicher Zielangabe übertragen werden. Laufzeitdaten gehören nie in das Skillverzeichnis.
 
@@ -127,3 +128,6 @@ Nur konkrete Loopback-, LAN- oder VPN-Adressen verwenden; niemals Wildcards, öf
 - [ ] IDs wurden aus aktueller JSON-Ausgabe übernommen.
 - [ ] Historische Sessions und Sätze blieben unverändert.
 - [ ] Kein Passwort und keine medizinische Diagnose erschienen im Chat.
+- [ ] Bei iPhone-Releases zeigte ein reales Gerät das eingebettete Hantelicon.
+- [ ] Bei iPhone-Releases funktionierte der Offline-Kaltstart mit vollständig geladenen Plan-, Trainings- und Statistikdaten.
+- [ ] Profilendpunkt, vollständige Tests, Sicherheitsprüfung und unabhängiges Review waren vor Commit und Push erfolgreich.

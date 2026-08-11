@@ -7,9 +7,11 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="GymPilot">
   <title>GymPilot</title>
-  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="manifest" href="/manifest.webmanifest?v=20">
+  <link rel="icon" type="image/x-icon" sizes="any" href="/favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-v20.png">
+  <link rel="apple-touch-icon-precomposed" sizes="180x180" href="/apple-touch-icon-precomposed-v20.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -18,6 +20,7 @@
   <div class="connection"><button id="logout" hidden>Abmelden</button><button id="dataStatus" class="data-status" type="button" title="Auswertungen aktualisieren">Aktuell</button><span id="healthDot" class="status-dot" aria-hidden="true"></span><span id="health" class="sr-only">Lokal</span></div>
 </header>
 <dialog id="login"><form id="loginForm"><h2>GymPilot entsperren</h2><p>Das Passwort bleibt auf dieser lokalen Verbindung.</p><label for="password">Passwort</label><input id="password" type="password" autocomplete="current-password" required><button>Anmelden</button><small id="loginError"></small></form></dialog>
+<dialog id="diagnostics"><form method="dialog"><div class="diagnostics-head"><div><span class="eyebrow">GERÄTEDIAGNOSE</span><h2>GymPilot-Speicher</h2></div><button value="close" aria-label="Schließen">×</button></div><p>Diese Angaben enthalten keine Trainingswerte oder Zugangsdaten.</p><pre id="diagnosticsOutput">Diagnose wird geladen …</pre><div class="diagnostics-actions"><button id="refreshDashboard" value="refresh">Online aktualisieren</button><button value="close">Schließen</button></div></form></dialog>
 
 <main>
   <section class="view" data-view="overview" id="overview-view">

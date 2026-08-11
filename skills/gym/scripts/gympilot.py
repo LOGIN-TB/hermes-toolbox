@@ -23,16 +23,18 @@ import secrets
 import subprocess
 import socket
 import sqlite3
+import ssl
 import stat
 import sys
 import tempfile
 import threading
 import time
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -58,6 +60,7 @@ PROFILE_ONBOARDING_FIELDS = ("display_name", "locale", "units", "goal")
 SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 8765
 MAX_HEALTH_RESPONSE = 4096
+WEBCLIP_PROFILE_PATH = "/install/GymPilot-WebClip.mobileconfig"
 SERVICE_CODE_ID = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
 
 
@@ -870,6 +873,8 @@ def positive_int(value: str) -> int:
 
 class GymPilotServer(ThreadingHTTPServer):
     allowed_hosts: set[str]
+    tls_enabled: bool = False
+    webclip_profile: bytes | None = None
     daemon_threads = True
     request_deadline = 15.0
 
@@ -947,6 +952,54 @@ def parse_host_authority(raw: str) -> tuple[str, int | None] | None:
     return host, port
 
 
+def build_webclip_profile(base_url: str) -> bytes:
+    parsed=urlparse(base_url)
+    if parsed.scheme!="https" or not parsed.hostname or parsed.path or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError("web clip base URL must be an HTTPS origin")
+    if parsed.username or parsed.password:
+        raise ValueError("web clip base URL must not contain credentials")
+    try:
+        port=parsed.port
+    except ValueError as error:
+        raise ValueError("web clip base URL has an invalid port") from error
+    host=_service_host(parsed.hostname)
+    canonical=_service_url(host,port,https=True)
+    if canonical!=base_url:
+        raise ValueError("web clip base URL must be canonical")
+    icon=(WEB_ROOT/"apple-touch-icon-v20.png").read_bytes()
+    if (len(icon)>1_000_000 or icon[:8]!=b"\x89PNG\r\n\x1a\n"
+            or len(icon)<26 or int.from_bytes(icon[16:20],"big")!=180
+            or int.from_bytes(icon[20:24],"big")!=180 or icon[25]!=2):
+        raise ValueError("web clip icon must be an opaque 180x180 RGB PNG below 1 MB")
+    target=f"{canonical}/#overview"
+    clip={
+        "FullScreen":True,
+        "Icon":icon,
+        "IgnoreManifestScope":False,
+        "IsRemovable":True,
+        "Label":"GymPilot",
+        "Precomposed":True,
+        "URL":target,
+        "PayloadDisplayName":"GymPilot",
+        "PayloadIdentifier":"de.login.gympilot.webclip",
+        "PayloadType":"com.apple.webClip.managed",
+        "PayloadUUID":str(uuid.uuid5(uuid.NAMESPACE_URL,target+"#payload")).upper(),
+        "PayloadVersion":1,
+    }
+    profile={
+        "PayloadContent":[clip],
+        "PayloadDescription":"Installiert ausschließlich den lokalen GymPilot-Webclip mit eingebettetem Hantel-Icon.",
+        "PayloadDisplayName":"GymPilot Web Clip",
+        "PayloadIdentifier":"de.login.gympilot.webclip.profile",
+        "PayloadOrganization":"LOGIN-TB contributors",
+        "PayloadRemovalDisallowed":False,
+        "PayloadType":"Configuration",
+        "PayloadUUID":str(uuid.uuid5(uuid.NAMESPACE_URL,target+"#profile")).upper(),
+        "PayloadVersion":1,
+    }
+    return plistlib.dumps(profile,fmt=plistlib.FMT_XML,sort_keys=True)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "GymPilot/0.1"
     def setup(self):
@@ -992,6 +1045,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.host_allowed(): return self.send_json({"error":"unrecognized host"},421)
         parsed=urlparse(self.path)
+        if parsed.path==WEBCLIP_PROFILE_PATH and getattr(self.server,"webclip_profile",None) is not None:
+            return self.send_webclip_profile()
         if parsed.path.startswith("/api/"):
             if parsed.path != "/api/health" and not self.authorized(): return self.send_json({"error":"authentication required"},401)
             try:
@@ -1010,6 +1065,15 @@ class Handler(BaseHTTPRequestHandler):
             except (sqlite3.Error,ValueError) as exc: return self.send_json({"error":str(exc)},400)
             return self.send_json({"error":"not found"},404)
         self.serve_static(parsed.path)
+    def do_HEAD(self):
+        if not self.host_allowed():
+            self.send_response(421); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Content-Length","0"); self.headers_common(); self.end_headers(); return
+        parsed=urlparse(self.path)
+        if parsed.path==WEBCLIP_PROFILE_PATH and getattr(self.server,"webclip_profile",None) is not None:
+            return self.send_webclip_profile(head_only=True)
+        if parsed.path.startswith("/api/"):
+            self.send_response(405); self.send_header("Allow","GET"); self.send_header("Content-Length","0"); self.headers_common(); self.end_headers(); return
+        self.serve_static(parsed.path, head_only=True)
     def do_POST(self):
         if not self.host_allowed(): return self.send_json({"error":"unrecognized host"},421)
         path=urlparse(self.path).path
@@ -1035,20 +1099,36 @@ class Handler(BaseHTTPRequestHandler):
             LIMITER.success(key)
             token=secrets.token_urlsafe(32); expires=int(time.time())+86400
             with connect() as con: con.execute("INSERT INTO web_sessions VALUES(?,?,?)",(hashlib.sha256(token.encode()).hexdigest(),int(time.time()),expires)); con.commit()
-            body=json.dumps({"ok":True}).encode(); self.send_response(200); self.send_header("Set-Cookie",f"gympilot_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400"); self.send_header("Content-Type","application/json"); self.send_header("Content-Length",str(len(body))); self.headers_common(); self.end_headers(); self.wfile.write(body); return
+            secure="; Secure" if getattr(self.server,"tls_enabled",False) else ""
+            body=json.dumps({"ok":True}).encode(); self.send_response(200); self.send_header("Set-Cookie",f"gympilot_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400{secure}"); self.send_header("Content-Type","application/json"); self.send_header("Content-Length",str(len(body))); self.headers_common(); self.end_headers(); self.wfile.write(body); return
         if path=="/api/logout":
             with connect() as con: con.execute("DELETE FROM web_sessions WHERE token_hash=?",(hashlib.sha256(self.token().encode()).hexdigest(),)); con.commit()
-            body=json.dumps({"ok":True}).encode(); self.send_response(200); self.send_header("Set-Cookie","gympilot_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"); self.send_header("Content-Type","application/json"); self.send_header("Content-Length",str(len(body))); self.headers_common(); self.end_headers(); self.wfile.write(body); return
+            secure="; Secure" if getattr(self.server,"tls_enabled",False) else ""
+            body=json.dumps({"ok":True}).encode(); self.send_response(200); self.send_header("Set-Cookie",f"gympilot_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{secure}"); self.send_header("Content-Type","application/json"); self.send_header("Content-Length",str(len(body))); self.headers_common(); self.end_headers(); self.wfile.write(body); return
         return self.send_json({"error":"not found"},404)
-    def serve_static(self, path):
+    def send_webclip_profile(self,head_only=False):
+        body=getattr(self.server,"webclip_profile",None)
+        if not isinstance(body,bytes): return self.send_json({"error":"not found"},404)
+        self.send_response(200)
+        self.send_header("Content-Type","application/x-apple-aspen-config")
+        self.send_header("Content-Length",str(len(body)))
+        self.headers_common()
+        self.end_headers()
+        if not head_only: self.wfile.write(body)
+    def serve_static(self, path, head_only=False):
         rel="index.html" if path in {"","/"} else path.lstrip("/"); candidate=(WEB_ROOT/rel).resolve()
-        if WEB_ROOT not in candidate.parents: return self.send_json({"error":"forbidden"},403)
-        if not candidate.is_file(): candidate=WEB_ROOT/"index.html"
+        if WEB_ROOT not in candidate.parents:
+            if not head_only: return self.send_json({"error":"forbidden"},403)
+            body=json.dumps({"error":"forbidden"}).encode(); self.send_response(403); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Content-Length",str(len(body))); self.headers_common(); self.end_headers(); return
+        if not candidate.is_file():
+            if not head_only: return self.send_json({"error":"not found"},404)
+            body=json.dumps({"error":"not found"}).encode(); self.send_response(404); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Content-Length",str(len(body))); self.headers_common(); self.end_headers(); return
         body=candidate.read_bytes(); mime=mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
-        self.send_response(200); self.send_header("Content-Type",mime); self.send_header("Content-Length",str(len(body))); self.headers_common("no-cache"); self.end_headers(); self.wfile.write(body)
+        self.send_response(200); self.send_header("Content-Type",mime); self.send_header("Content-Length",str(len(body))); self.headers_common("no-cache"); self.end_headers()
+        if not head_only: self.wfile.write(body)
 
 
-def make_server(host="127.0.0.1", port=8765):
+def make_server(host="127.0.0.1", port=8765, tls_cert=None, tls_key=None):
     if not valid_host(host): raise ValueError("host must be a concrete local, LAN, or VPN address; wildcard/public hosts are forbidden")
     normalized="localhost" if host.lower()=="localhost" else ipaddress.ip_address(host).compressed
     server_class=GymPilotIPv6Server if normalized != "localhost" and ipaddress.ip_address(normalized).version==6 else GymPilotServer
@@ -1058,6 +1138,22 @@ def make_server(host="127.0.0.1", port=8765):
         if ipaddress.ip_address(host).is_loopback: server.allowed_hosts.add("localhost")
     except ValueError:
         if host.lower()=="localhost": server.allowed_hosts.add("127.0.0.1")
+    if bool(tls_cert) != bool(tls_key):
+        server.server_close()
+        raise ValueError("both TLS certificate and key are required")
+    if tls_cert:
+        context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version=ssl.TLSVersion.TLSv1_2
+        try: context.load_cert_chain(str(tls_cert),str(tls_key))
+        except (OSError,ssl.SSLError) as error:
+            server.server_close()
+            raise ValueError(f"invalid TLS certificate or key: {error}") from error
+        server.socket=context.wrap_socket(server.socket,server_side=True)
+    server.tls_enabled=bool(tls_cert)
+    server.webclip_profile=(
+        build_webclip_profile(_service_url(normalized,server.server_port,https=True))
+        if tls_cert else None
+    )
     return server
 
 
@@ -1077,6 +1173,140 @@ def _reject_service_control_characters(*values) -> None:
             raise ValueError("service paths must not contain control characters")
 
 
+def _tls_paths(host):
+    normalized=_service_host(host)
+    if "%" in normalized: raise ValueError("local HTTPS does not support scoped IPv6 addresses")
+    root=_service_data_root()/"tls"
+    identity=hashlib.sha256(normalized.encode()).hexdigest()[:16]
+    return {
+        "root":root,
+        "ca_key":root/"gympilot-local-ca-key.pem",
+        "ca_certificate":root/"gympilot-local-ca.crt",
+        "server_key":root/f"server-{identity}-key.pem",
+        "server_certificate":root/f"server-{identity}.crt",
+    }
+
+
+def _openssl(command):
+    try: result=subprocess.run(["openssl",*command],text=True,capture_output=True)
+    except FileNotFoundError as error: raise OSError("OpenSSL is required to create local HTTPS certificates") from error
+    if result.returncode:
+        detail=(result.stderr or result.stdout or "OpenSSL failed").strip()
+        raise OSError(f"OpenSSL failed: {detail}")
+
+
+def _openssl_probe(command):
+    try: return subprocess.run(["openssl",*command],text=True,capture_output=True)
+    except FileNotFoundError as error: raise OSError("OpenSSL is required to validate local HTTPS certificates") from error
+
+
+def _regular_private_file(path):
+    try: mode=os.stat(path,follow_symlinks=False).st_mode
+    except FileNotFoundError: return False
+    if not stat.S_ISREG(mode): raise ValueError(f"TLS path must be a regular file: {path}")
+    return True
+
+
+def _certificate_extension_values(certificate_text,name):
+    match=re.search(rf"X509v3 {re.escape(name)}(?:: critical|:)?\s*\n\s*([^\n]+)",certificate_text)
+    return {value.strip() for value in match.group(1).split(",")} if match else set()
+
+
+def _certificate_matches_host(certificate_text,host):
+    alternatives=_certificate_extension_values(certificate_text,"Subject Alternative Name")
+    if host=="localhost":
+        return any(value.startswith("DNS:") and value[4:].lower()=="localhost" for value in alternatives)
+    expected=ipaddress.ip_address(host)
+    for value in alternatives:
+        if not value.startswith("IP Address:"): continue
+        try:
+            if ipaddress.ip_address(value.split(":",1)[1])==expected: return True
+        except ValueError: continue
+    return False
+
+
+def ensure_local_tls(host,_verification_pass=False):
+    host=_service_host(host); paths=_tls_paths(host); root=paths["root"]
+    private_directory(root)
+    for path in paths.values():
+        if path == root: continue
+        reject_symlink_components(path.parent)
+        if _regular_private_file(path) and os.name != "nt": os.chmod(path,0o600)
+    ca_ready=_regular_private_file(paths["ca_key"]) and _regular_private_file(paths["ca_certificate"])
+    if ca_ready:
+        ca_certificate=_openssl_probe(["x509","-in",str(paths["ca_certificate"]),"-noout","-checkend","2592000"])
+        ca_key=_openssl_probe(["rsa","-in",str(paths["ca_key"]),"-noout","-check"])
+        ca_cert_modulus=_openssl_probe(["x509","-in",str(paths["ca_certificate"]),"-noout","-modulus"])
+        ca_key_modulus=_openssl_probe(["rsa","-in",str(paths["ca_key"]),"-noout","-modulus"])
+        ca_text=_openssl_probe(["x509","-in",str(paths["ca_certificate"]),"-noout","-text"])
+        ca_ready=(ca_certificate.returncode==ca_key.returncode==ca_cert_modulus.returncode==ca_key_modulus.returncode==ca_text.returncode==0
+                  and "CA:TRUE" in ca_text.stdout and "Certificate Sign" in ca_text.stdout
+                  and ca_cert_modulus.stdout==ca_key_modulus.stdout)
+    server_ready=ca_ready and _regular_private_file(paths["server_key"]) and _regular_private_file(paths["server_certificate"])
+    if server_ready:
+        certificate=_openssl_probe(["x509","-in",str(paths["server_certificate"]),"-noout","-checkend","2592000"])
+        verification=_openssl_probe(["verify","-CAfile",str(paths["ca_certificate"]),str(paths["server_certificate"])])
+        certificate_text=_openssl_probe(["x509","-in",str(paths["server_certificate"]),"-noout","-text"])
+        cert_modulus=_openssl_probe(["x509","-in",str(paths["server_certificate"]),"-noout","-modulus"])
+        key_modulus=_openssl_probe(["rsa","-in",str(paths["server_key"]),"-noout","-modulus"])
+        key_usage=_certificate_extension_values(certificate_text.stdout,"Key Usage")
+        extended_usage=_certificate_extension_values(certificate_text.stdout,"Extended Key Usage")
+        server_ready=(certificate.returncode==verification.returncode==certificate_text.returncode==cert_modulus.returncode==key_modulus.returncode==0
+                      and "CA:FALSE" in certificate_text.stdout
+                      and {"Digital Signature","Key Encipherment"}.issubset(key_usage)
+                      and "TLS Web Server Authentication" in extended_usage
+                      and "Authority Key Identifier" in certificate_text.stdout
+                      and _certificate_matches_host(certificate_text.stdout,host)
+                      and cert_modulus.stdout==key_modulus.stdout)
+    generated=False
+    with tempfile.TemporaryDirectory(prefix=".tls-",dir=root) as temporary:
+        temporary=Path(temporary)
+        ca_config=temporary/"ca.cnf"
+        ca_config.write_text(
+            "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=v3_ca\n"
+            f"[dn]\nCN=GymPilot Local CA {dashboard_instance_id()[:12]}\n"
+            "[v3_ca]\nbasicConstraints=critical,CA:TRUE,pathlen:0\n"
+            "keyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n"
+            "authorityKeyIdentifier=keyid:always\n",
+            encoding="utf-8",
+        )
+        if not ca_ready:
+            ca_key=temporary/"ca-key.pem"; ca_certificate=temporary/"ca.crt"
+            _openssl(["req","-x509","-newkey","rsa:2048","-nodes","-sha256","-days","3650",
+                      "-config",str(ca_config),"-keyout",str(ca_key),"-out",str(ca_certificate)])
+            os.chmod(ca_key,0o600); os.chmod(ca_certificate,0o600)
+            os.replace(ca_key,paths["ca_key"]); os.replace(ca_certificate,paths["ca_certificate"])
+            server_ready=False; generated=True
+        if not server_ready:
+            server_config=temporary/"server.cnf"
+            san_type="DNS" if host=="localhost" else "IP"
+            server_config.write_text(
+                "[req]\nprompt=no\ndistinguished_name=dn\n"
+                f"[dn]\nCN={host}\n[v3_server]\nbasicConstraints=critical,CA:FALSE\n"
+                "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n"
+                f"subjectAltName={san_type}:{host}\nauthorityKeyIdentifier=keyid,issuer\n",
+                encoding="utf-8",
+            )
+            server_key=temporary/"server-key.pem"; request=temporary/"server.csr"; server_certificate=temporary/"server.crt"
+            _openssl(["req","-new","-newkey","rsa:2048","-nodes","-sha256","-config",str(server_config),
+                      "-keyout",str(server_key),"-out",str(request)])
+            serial="0x"+secrets.token_hex(16)
+            _openssl(["x509","-req","-sha256","-days","825","-in",str(request),
+                      "-CA",str(paths["ca_certificate"]),"-CAkey",str(paths["ca_key"]),"-set_serial",serial,
+                      "-extfile",str(server_config),"-extensions","v3_server","-out",str(server_certificate)])
+            os.chmod(server_key,0o600); os.chmod(server_certificate,0o600)
+            os.replace(server_key,paths["server_key"]); os.replace(server_certificate,paths["server_certificate"])
+            generated=True
+    if generated:
+        if _verification_pass: raise OSError("generated local HTTPS certificates failed final validation")
+        return ensure_local_tls(host,_verification_pass=True)
+    return {
+        "ca_certificate":str(paths["ca_certificate"]),
+        "server_certificate":str(paths["server_certificate"]),
+        "server_key":str(paths["server_key"]),
+    }
+
+
 def dashboard_instance_id() -> str:
     profile_root=_service_profile_root(); selected_data=_service_data_root()
     return hashlib.sha256(f"{profile_root}\0{selected_data}".encode()).hexdigest()[:16]
@@ -1087,10 +1317,11 @@ def _systemd_quote(value) -> str:
     return '"' + str(value).replace("%","%%").replace("\\","\\\\").replace('"','\\"') + '"'
 
 
-def _service_url(host,port=None) -> str:
+def _service_url(host,port=None,https=False) -> str:
     port=SERVICE_PORT if port is None else port
     authority=f"[{host}]" if host != "localhost" and ipaddress.ip_address(host).version==6 else host
-    return f"http://{authority}:{port}"
+    scheme="https" if https else "http"
+    return f"{scheme}://{authority}:{port}"
 
 
 def _service_host(host) -> str:
@@ -1099,7 +1330,7 @@ def _service_host(host) -> str:
     return "localhost" if host.lower()=="localhost" else ipaddress.ip_address(host).compressed
 
 
-def dashboard_service_definition(system_name=None,user_home=None,executable=None,host=None):
+def dashboard_service_definition(system_name=None,user_home=None,executable=None,host=None,https=False):
     system_name=system_name or platform.system()
     if system_name not in {"Darwin","Linux"}: raise ValueError("persistent dashboard service is supported on macOS and Linux")
     host=_service_host(SERVICE_HOST if host is None else host)
@@ -1112,6 +1343,11 @@ def dashboard_service_definition(system_name=None,user_home=None,executable=None
     script=Path(__file__).resolve(); logs=selected_data/"logs"
     _reject_service_control_characters(profile_root,selected_data,user_home,executable,script,logs)
     arguments=[str(executable),str(script),"server","--host",host,"--port",str(SERVICE_PORT)]
+    tls=None
+    if https:
+        paths=_tls_paths(host)
+        tls={"ca_certificate":str(paths["ca_certificate"]),"server_certificate":str(paths["server_certificate"]),"server_key":str(paths["server_key"])}
+        arguments += ["--tls-cert",tls["server_certificate"],"--tls-key",tls["server_key"]]
     environment={"HERMES_HOME":str(profile_root),"GYMPILOT_DATA_DIR":str(selected_data),"PYTHONDONTWRITEBYTECODE":"1"}
     if system_name=="Darwin":
         label=f"de.login.gympilot.dashboard.{identity}"
@@ -1122,7 +1358,7 @@ def dashboard_service_definition(system_name=None,user_home=None,executable=None
             "StandardOutPath":str(logs/"dashboard.stdout.log"),
             "StandardErrorPath":str(logs/"dashboard.stderr.log"),
         },fmt=plistlib.FMT_XML,sort_keys=True)
-        return {"manager":"launchd","label":label,"unit":label,"path":path,"content":content,"host":host,"port":SERVICE_PORT,"url":_service_url(host),"profile":str(profile_root),"data_dir":str(selected_data)}
+        return {"manager":"launchd","label":label,"unit":label,"path":path,"content":content,"host":host,"port":SERVICE_PORT,"https":https,"tls":tls,"url":_service_url(host,https=https),"profile":str(profile_root),"data_dir":str(selected_data)}
     unit=f"gympilot-dashboard-{identity}.service"; path=user_home/".config"/"systemd"/"user"/unit
     exec_start=" ".join(_systemd_quote(value) for value in arguments)
     environment_lines="".join(f"Environment={_systemd_quote(f'{key}={value}')}\n" for key,value in environment.items())
@@ -1135,7 +1371,7 @@ def dashboard_service_definition(system_name=None,user_home=None,executable=None
         f"StandardOutput={stdout_target}\nStandardError={stderr_target}\n\n"
         "[Install]\nWantedBy=default.target\n"
     )
-    return {"manager":"systemd","label":unit,"unit":unit,"path":path,"content":content,"host":host,"port":SERVICE_PORT,"url":_service_url(host),"profile":str(profile_root),"data_dir":str(selected_data)}
+    return {"manager":"systemd","label":unit,"unit":unit,"path":path,"content":content,"host":host,"port":SERVICE_PORT,"https":https,"tls":tls,"url":_service_url(host,https=https),"profile":str(profile_root),"data_dir":str(selected_data)}
 
 
 def _service_parent_descriptor(path: Path,create=False):
@@ -1209,31 +1445,50 @@ def _read_service_definition(path: Path,max_bytes=131072) -> bytes:
         os.close(parent_fd)
 
 
-def _installed_service_endpoint(definition):
+def _installed_service_configuration(definition):
     payload=_read_service_definition(definition["path"])
+    tls_cert=tls_key=None; suffix=""
     if definition["manager"]=="launchd":
         try: document=plistlib.loads(payload)
         except Exception as error: raise ValueError("installed launchd service definition is invalid") from error
         arguments=document.get("ProgramArguments") if isinstance(document,dict) else None
-        if (not isinstance(arguments,list) or len(arguments)!=7 or any(not isinstance(value,str) for value in arguments)
+        if (not isinstance(arguments,list) or len(arguments) not in {7,11} or any(not isinstance(value,str) for value in arguments)
                 or arguments[2]!="server" or arguments[3]!="--host" or arguments[5]!="--port"):
             raise ValueError("installed launchd service arguments are invalid")
         host=arguments[4]; port_text=arguments[6]
+        if len(arguments)==11:
+            if arguments[7]!="--tls-cert" or arguments[9]!="--tls-key": raise ValueError("installed launchd TLS arguments are invalid")
+            tls_cert,tls_key=arguments[8],arguments[10]
     else:
         try: content=payload.decode("utf-8")
         except UnicodeDecodeError as error: raise ValueError("installed systemd service definition is invalid") from error
         exec_lines=re.findall(r'(?m)^ExecStart=(.*)$',content)
         quoted_argument=r'"(?:[^"\\]|\\.)*"'
-        pattern=rf'{quoted_argument} {quoted_argument} "server" "--host" "([^"\\\r\n]+)" "--port" "([0-9]+)"'
+        pattern=rf'{quoted_argument} {quoted_argument} "server" "--host" "([^"\\\r\n]+)" "--port" "([0-9]+)"(.*)'
         match=re.fullmatch(pattern,exec_lines[0]) if len(exec_lines)==1 else None
         if match is None: raise ValueError("installed systemd service endpoint is invalid")
-        host,port_text=match.groups()
+        host,port_text,suffix=match.groups()
         host=host.replace("%%","%")
     host=_service_host(host)
     try: port=int(port_text)
     except (TypeError,ValueError) as error: raise ValueError("installed service port is invalid") from error
     if port!=SERVICE_PORT: raise ValueError(f"installed service port must be {SERVICE_PORT}")
-    return host,port
+    if definition["manager"]=="systemd":
+        if suffix:
+            expected=_tls_paths(host)
+            secure_suffix=f' "--tls-cert" {_systemd_quote(expected["server_certificate"])} "--tls-key" {_systemd_quote(expected["server_key"])}'
+            if suffix!=secure_suffix: raise ValueError("installed systemd TLS arguments are invalid")
+            tls_cert=str(expected["server_certificate"]); tls_key=str(expected["server_key"])
+    elif tls_cert is not None:
+        expected=_tls_paths(host)
+        if tls_cert!=str(expected["server_certificate"]) or tls_key!=str(expected["server_key"]):
+            raise ValueError("installed launchd TLS paths are invalid")
+    return {"host":host,"port":port,"https":tls_cert is not None,"tls_cert":tls_cert,"tls_key":tls_key}
+
+
+def _installed_service_endpoint(definition):
+    configuration=_installed_service_configuration(definition)
+    return configuration["host"],configuration["port"]
 
 
 def _unlink_service_definition(path: Path) -> None:
@@ -1268,12 +1523,16 @@ def _write_service_definition(path: Path,content) -> None:
         os.close(parent_fd)
 
 
-def dashboard_health(timeout=1,opener=None,host=None,port=None) -> bool:
-    host=_service_host(SERVICE_HOST if host is None else host)
-    port=SERVICE_PORT if port is None else port
-    opener=opener or build_opener(ProxyHandler({}))
-    request=Request(f"{_service_url(host,port)}/api/health",headers={"Accept":"application/json"})
+def dashboard_health(timeout=1,opener=None,host=None,port=None,https=False,ca_certificate=None) -> bool:
     try:
+        host=_service_host(SERVICE_HOST if host is None else host)
+        port=SERVICE_PORT if port is None else port
+        if opener is None:
+            if https:
+                context=ssl.create_default_context(cafile=str(ca_certificate))
+                opener=build_opener(ProxyHandler({}),HTTPSHandler(context=context))
+            else: opener=build_opener(ProxyHandler({}))
+        request=Request(f"{_service_url(host,port,https=https)}/api/health",headers={"Accept":"application/json"})
         with opener.open(request,timeout=timeout) as response:
             if response.status!=200: return False
             content_type=(response.headers.get("Content-Type") or "").split(";",1)[0].strip().lower()
@@ -1288,16 +1547,22 @@ def dashboard_health(timeout=1,opener=None,host=None,port=None) -> bool:
     except (OSError,ValueError,json.JSONDecodeError): return False
 
 
-def manage_dashboard_service(action,system_name=None,user_home=None,executable=None,runner=subprocess.run,health_checker=None,health_timeout=5,host=None):
+def manage_dashboard_service(action,system_name=None,user_home=None,executable=None,runner=subprocess.run,health_checker=None,health_timeout=5,host=None,https=None):
     if action not in {"install","restart","status","uninstall"}: raise ValueError("service action must be install, restart, status, or uninstall")
-    definition=dashboard_service_definition(system_name,user_home,executable,host=host); path=definition["path"]
+    definition=dashboard_service_definition(system_name,user_home,executable,host=host,https=bool(https)); path=definition["path"]
     _validate_service_parent(path)
     if host is None and _service_definition_is_regular(path):
-        installed_host,installed_port=_installed_service_endpoint(definition)
-        definition=dashboard_service_definition(system_name,user_home,executable,host=installed_host)
-        if definition["port"]!=installed_port: raise ValueError("installed service endpoint is inconsistent")
+        installed=_installed_service_configuration(definition)
+        selected_https=installed["https"] if https is None else bool(https)
+        definition=dashboard_service_definition(system_name,user_home,executable,host=installed["host"],https=selected_https)
+        if definition["port"]!=installed["port"]: raise ValueError("installed service endpoint is inconsistent")
+    if action in {"install","restart"} and definition["https"]:
+        definition["tls"]=ensure_local_tls(definition["host"])
     if health_checker is None:
-        health_checker=lambda: dashboard_health(host=definition["host"],port=definition["port"])
+        health_checker=lambda: dashboard_health(
+            host=definition["host"],port=definition["port"],https=definition["https"],
+            ca_certificate=definition["tls"]["ca_certificate"] if definition["tls"] else None,
+        )
     private_directory(_service_data_root()); private_directory(_service_data_root()/"logs")
     def run(command,check=True,env=None):
         if env is None and command[:2]==["systemctl","--user"]: env=systemd_env
@@ -1424,7 +1689,11 @@ def manage_dashboard_service(action,system_name=None,user_home=None,executable=N
             detail=(stopped.stderr or stopped.stdout or "service remained active").strip()
             raise OSError(f"dashboard health failed and cleanup failed: {detail}")
         raise ValueError(f"dashboard service failed its health check; inspect {definition['data_dir']}/logs")
-    return {"ok":True,"action":action,"manager":definition["manager"],"unit":definition["unit"],"path":str(path),"installed":_service_definition_is_regular(path),"running":running,"healthy":healthy,"url":definition["url"],"profile":definition["profile"],"data_dir":definition["data_dir"]}
+    result={"ok":True,"action":action,"manager":definition["manager"],"unit":definition["unit"],"path":str(path),"installed":_service_definition_is_regular(path),"running":running,"healthy":healthy,"url":definition["url"],"profile":definition["profile"],"data_dir":definition["data_dir"]}
+    if definition["https"]:
+        result["ca_certificate"]=definition["tls"]["ca_certificate"]
+        result["webclip_profile_url"]=definition["url"]+WEBCLIP_PROFILE_PATH
+    return result
 
 
 def validate_arguments(args) -> None:
@@ -1455,7 +1724,10 @@ def validate_arguments(args) -> None:
 def command(args):
     validate_arguments(args)
     ensure()
-    if args.command=="service": return manage_dashboard_service(args.action,host=getattr(args,"host",None))
+    if args.command=="service":
+        if getattr(args,"https",False):
+            return manage_dashboard_service(args.action,host=getattr(args,"host",None),https=True)
+        return manage_dashboard_service(args.action,host=getattr(args,"host",None))
     if args.command=="init": return initialize()
     if args.command=="status":
         with connect() as con: counts={t:con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("routines","exercises","equipment_aliases","sessions","workout_sets")}
@@ -1750,10 +2022,10 @@ def parser():
     for name in ("export","backup"): sub.add_parser(name)
     sec=sub.add_parser("security"); secs=sec.add_subparsers(dest="action",required=True); secs.add_parser("enable"); secs.add_parser("disable")
     svc=sub.add_parser("service"); svcs=svc.add_subparsers(dest="action",required=True)
-    install=svcs.add_parser("install"); install.add_argument("--host")
+    install=svcs.add_parser("install"); install.add_argument("--host"); install.add_argument("--https",action="store_true")
     for action in ("restart","status","uninstall"):
         svcs.add_parser(action)
-    srv=sub.add_parser("server"); srv.add_argument("--host",default="127.0.0.1"); srv.add_argument("--port",type=safe_int,default=8765)
+    srv=sub.add_parser("server"); srv.add_argument("--host",default="127.0.0.1"); srv.add_argument("--port",type=safe_int,default=8765); srv.add_argument("--tls-cert"); srv.add_argument("--tls-key")
     return p
 
 
@@ -1762,7 +2034,7 @@ def main():
     try:
         validate_arguments(args)
         if args.command=="server":
-            ensure(); server=make_server(args.host,args.port); print(f"GymPilot: http://{args.host}:{server.server_port}",flush=True); server.serve_forever(); return
+            ensure(); server=make_server(args.host,args.port,args.tls_cert,args.tls_key); scheme="https" if args.tls_cert else "http"; print(f"GymPilot: {scheme}://{args.host}:{server.server_port}",flush=True); server.serve_forever(); return
         result=command(args); print(json.dumps(result,ensure_ascii=False,allow_nan=False) if args.json else human(result))
     except (ValueError,sqlite3.Error,OSError,OverflowError) as exc:
         if args.json: print(json.dumps({"ok":False,"error":str(exc)},ensure_ascii=False))

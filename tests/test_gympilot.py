@@ -11,6 +11,7 @@ from datetime import date
 from pathlib import Path
 import socket
 import sqlite3
+import ssl
 import stat
 import struct
 import subprocess
@@ -340,7 +341,14 @@ class GymPilotTest(unittest.TestCase):
             "assets/web/icons/icon-192.png",
             "assets/web/icons/icon-512.png",
             "assets/web/icons/apple-touch-icon.png",
+            "assets/web/apple-touch-icon.png",
+            "assets/web/apple-touch-icon-precomposed.png",
+            "assets/web/apple-touch-icon-v20.png",
+            "assets/web/apple-touch-icon-precomposed-v20.png",
+            "assets/web/icons/icon-192-v20.png",
+            "assets/web/icons/icon-512-v20.png",
             "assets/web/icons/favicon-32.png",
+            "assets/web/favicon.ico",
             "assets/web/icons/icon.svg",
         }
         for relative in expected:
@@ -767,6 +775,176 @@ class GymPilotTest(unittest.TestCase):
             with self.subTest(host=unsafe), self.assertRaisesRegex(ValueError, "concrete local, LAN, or VPN"):
                 gym.dashboard_service_definition(system_name="Darwin", host=unsafe)
 
+    def test_local_https_material_and_server_support_offline_pwa_origin(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        gym.initialize()
+
+        material = gym.ensure_local_tls("127.0.0.1")
+        ca_cert = Path(material["ca_certificate"])
+        server_cert = Path(material["server_certificate"])
+        server_key = Path(material["server_key"])
+        self.assertTrue(ca_cert.is_file())
+        self.assertTrue(server_cert.is_file())
+        self.assertTrue(server_key.is_file())
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(server_key.stat().st_mode), 0o600)
+        details = subprocess.run(
+            ["openssl", "x509", "-in", str(server_cert), "-noout", "-text"],
+            text=True, capture_output=True, check=True,
+        ).stdout
+        self.assertIn("IP Address:127.0.0.1", details)
+
+        definition = gym.dashboard_service_definition(
+            system_name="Darwin", user_home=Path(self.tmp.name) / "user",
+            executable=Path("/usr/bin/python3"), host="127.0.0.1", https=True,
+        )
+        plist = plistlib.loads(definition["content"])
+        self.assertEqual(definition["url"], "https://127.0.0.1:8765")
+        self.assertIn("--tls-cert", plist["ProgramArguments"])
+        self.assertIn("--tls-key", plist["ProgramArguments"])
+        gym._write_service_definition(definition["path"], definition["content"])
+        installed = gym._installed_service_configuration(definition)
+        self.assertTrue(installed["https"])
+        self.assertEqual(installed["tls_cert"], str(server_cert))
+
+        server_cert.write_text("damaged", encoding="utf-8")
+        repaired = gym.ensure_local_tls("127.0.0.1")
+        self.assertEqual(repaired["server_certificate"], str(server_cert))
+        subprocess.run(
+            ["openssl", "verify", "-CAfile", str(ca_cert), str(server_cert)],
+            text=True, capture_output=True, check=True,
+        )
+
+        replacement_key = Path(self.tmp.name) / "replacement-ca-key.pem"
+        subprocess.run(["openssl", "genrsa", "-out", str(replacement_key), "2048"], check=True, capture_output=True)
+        os.replace(replacement_key, Path(material["ca_certificate"]).with_name("gympilot-local-ca-key.pem"))
+        gym.ensure_local_tls("127.0.0.1")
+        ca_modulus = subprocess.run(
+            ["openssl", "x509", "-in", str(ca_cert), "-noout", "-modulus"],
+            text=True, capture_output=True, check=True,
+        ).stdout
+        ca_key_modulus = subprocess.run(
+            ["openssl", "rsa", "-in", str(ca_cert.with_name("gympilot-local-ca-key.pem")), "-noout", "-modulus"],
+            text=True, capture_output=True, check=True,
+        ).stdout
+        self.assertEqual(ca_modulus, ca_key_modulus)
+
+        wrong_key = Path(self.tmp.name) / "wrong-host-key.pem"
+        wrong_request = Path(self.tmp.name) / "wrong-host.csr"
+        wrong_cert = Path(self.tmp.name) / "wrong-host.crt"
+        wrong_extensions = Path(self.tmp.name) / "wrong-host.cnf"
+        wrong_extensions.write_text(
+            "[server]\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n"
+            "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.2\nauthorityKeyIdentifier=keyid,issuer\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ["openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-sha256", "-subj", "/CN=127.0.0.2",
+             "-keyout", str(wrong_key), "-out", str(wrong_request)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["openssl", "x509", "-req", "-sha256", "-days", "90", "-in", str(wrong_request),
+             "-CA", str(ca_cert), "-CAkey", str(ca_cert.with_name("gympilot-local-ca-key.pem")),
+             "-set_serial", "0x123456", "-extfile", str(wrong_extensions), "-extensions", "server", "-out", str(wrong_cert)],
+            check=True, capture_output=True,
+        )
+        os.replace(wrong_key, server_key)
+        os.replace(wrong_cert, server_cert)
+        gym.ensure_local_tls("127.0.0.1")
+        repaired_text = subprocess.run(
+            ["openssl", "x509", "-in", str(server_cert), "-noout", "-text"],
+            text=True, capture_output=True, check=True,
+        ).stdout
+        self.assertIn("IP Address:127.0.0.1", repaired_text)
+        self.assertNotIn("IP Address:127.0.0.2", repaired_text)
+
+        unsuitable_key = Path(self.tmp.name) / "unsuitable-key.pem"
+        unsuitable_request = Path(self.tmp.name) / "unsuitable.csr"
+        unsuitable_cert = Path(self.tmp.name) / "unsuitable.crt"
+        unsuitable_extensions = Path(self.tmp.name) / "unsuitable.cnf"
+        unsuitable_extensions.write_text(
+            "[server]\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,dataEncipherment\n"
+            "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\nauthorityKeyIdentifier=keyid,issuer\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ["openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-sha256", "-subj", "/CN=127.0.0.1",
+             "-keyout", str(unsuitable_key), "-out", str(unsuitable_request)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["openssl", "x509", "-req", "-sha256", "-days", "90", "-in", str(unsuitable_request),
+             "-CA", str(ca_cert), "-CAkey", str(ca_cert.with_name("gympilot-local-ca-key.pem")),
+             "-set_serial", "0x654321", "-extfile", str(unsuitable_extensions), "-extensions", "server", "-out", str(unsuitable_cert)],
+            check=True, capture_output=True,
+        )
+        os.replace(unsuitable_key, server_key)
+        os.replace(unsuitable_cert, server_cert)
+        gym.ensure_local_tls("127.0.0.1")
+        repaired_usage_text = subprocess.run(
+            ["openssl", "x509", "-in", str(server_cert), "-noout", "-text"],
+            text=True, capture_output=True, check=True,
+        ).stdout
+        self.assertIn("Digital Signature", repaired_usage_text)
+        self.assertIn("Key Encipherment", repaired_usage_text)
+
+        ipv6_material = gym.ensure_local_tls("fd00::1")
+        self.assertTrue(Path(ipv6_material["server_certificate"]).is_file())
+
+        invalid_ca_key = Path(self.tmp.name) / "invalid-ca-key.pem"
+        invalid_ca_cert = Path(self.tmp.name) / "invalid-ca.crt"
+        invalid_ca_config = Path(self.tmp.name) / "invalid-ca.cnf"
+        invalid_ca_config.write_text(
+            "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=invalid\n"
+            "[dn]\nCN=Not a CA\n[invalid]\nbasicConstraints=critical,CA:FALSE\n"
+            "keyUsage=critical,digitalSignature\nsubjectKeyIdentifier=hash\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "90",
+             "-config", str(invalid_ca_config), "-keyout", str(invalid_ca_key), "-out", str(invalid_ca_cert)],
+            check=True, capture_output=True,
+        )
+        os.replace(invalid_ca_key, ca_cert.with_name("gympilot-local-ca-key.pem"))
+        os.replace(invalid_ca_cert, ca_cert)
+        gym.ensure_local_tls("127.0.0.1")
+        repaired_ca_text = subprocess.run(
+            ["openssl", "x509", "-in", str(ca_cert), "-noout", "-text"],
+            text=True, capture_output=True, check=True,
+        ).stdout
+        self.assertIn("CA:TRUE", repaired_ca_text)
+        self.assertIn("Certificate Sign", repaired_ca_text)
+
+        server = gym.make_server("127.0.0.1", 0, tls_cert=server_cert, tls_key=server_key)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            context = ssl.create_default_context(cafile=str(ca_cert))
+            conn = http.client.HTTPSConnection("127.0.0.1", server.server_port, timeout=5, context=context)
+            conn.request("GET", "/api/health")
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read())["status"], "ok")
+
+            with gym.connect() as con:
+                con.execute("INSERT INTO auth_config VALUES(1,?,?)", (gym.hash_password("correct horse battery"), gym.now()))
+                con.commit()
+            body = json.dumps({"password": "correct horse battery"})
+            conn.request("POST", "/api/login", body=body, headers={"Content-Type": "application/json"})
+            response = conn.getresponse()
+            response.read()
+            self.assertEqual(response.status, 200)
+            self.assertIn("Secure", response.getheader("Set-Cookie") or "")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(5)
+
+        parsed = gym.parser().parse_args(["service", "install", "--host", "127.0.0.1", "--https"])
+        self.assertTrue(parsed.https)
+
     def test_systemd_service_round_trips_scoped_ipv6_host(self):
         gym = load_module()
         os.environ["HERMES_HOME"] = str(self.home)
@@ -801,10 +979,24 @@ class GymPilotTest(unittest.TestCase):
         self.assertEqual(installed["url"], "http://192.168.50.10:8765")
         status = gym.manage_dashboard_service("status", **kwargs)
         self.assertEqual(status["url"], "http://192.168.50.10:8765")
+        upgraded = gym.manage_dashboard_service("install", https=True, **kwargs)
+        self.assertEqual(upgraded["url"], "https://192.168.50.10:8765")
+        self.assertEqual(
+            upgraded["webclip_profile_url"],
+            "https://192.168.50.10:8765/install/GymPilot-WebClip.mobileconfig",
+        )
+        self.assertTrue(Path(upgraded["ca_certificate"]).is_file())
+        secure_status = gym.manage_dashboard_service("status", **kwargs)
+        self.assertEqual(secure_status["url"], "https://192.168.50.10:8765")
+        self.assertEqual(
+            secure_status["webclip_profile_url"],
+            upgraded["webclip_profile_url"],
+        )
         restarted = gym.manage_dashboard_service("restart", **kwargs)
-        self.assertEqual(restarted["url"], "http://192.168.50.10:8765")
+        self.assertEqual(restarted["url"], "https://192.168.50.10:8765")
         plist = plistlib.loads(Path(restarted["path"]).read_bytes())
-        self.assertEqual(plist["ProgramArguments"][-4:], ["--host", "192.168.50.10", "--port", "8765"])
+        self.assertEqual(plist["ProgramArguments"][3:7], ["--host", "192.168.50.10", "--port", "8765"])
+        self.assertEqual(plist["ProgramArguments"][7], "--tls-cert")
 
     def test_installed_service_endpoint_rejects_duplicate_host_arguments(self):
         gym = load_module()
@@ -928,6 +1120,10 @@ class GymPilotTest(unittest.TestCase):
         class StaleCodeOpener:
             def open(self, *_args, **_kwargs): return StaleCodeResponse()
         self.assertFalse(gym.dashboard_health(opener=StaleCodeOpener()))
+        self.assertFalse(gym.dashboard_health(
+            https=True,
+            ca_certificate=Path(self.tmp.name) / "missing-ca.crt",
+        ))
 
     def test_service_parent_symlinks_are_rejected_without_mutation(self):
         gym = load_module()
@@ -1361,6 +1557,39 @@ class GymPilotTest(unittest.TestCase):
             self.assertIn("pathname.startsWith('/api/')", sw)
             self.assertIn("cache: 'no-store'", sw)
             self.assertNotIn("/api/today", sw.split("SHELL=", 1)[-1].split(";", 1)[0])
+            icon_path = WEB / "apple-touch-icon-v20.png"
+            conn.request("HEAD", "/apple-touch-icon-v20.png")
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader("Content-Type"), "image/png")
+            content_length = response.getheader("Content-Length")
+            self.assertIsNotNone(content_length)
+            self.assertEqual(int(content_length or 0), icon_path.stat().st_size)
+            self.assertEqual(response.read(), b"")
+            conn.request("GET", "/favicon.ico")
+            response = conn.getresponse()
+            favicon = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertIn(response.getheader("Content-Type"), {"image/x-icon", "image/vnd.microsoft.icon"})
+            self.assertEqual(favicon[:4], b"\x00\x00\x01\x00")
+            conn.request("GET", "/missing-icon.png")
+            response = conn.getresponse()
+            response.read()
+            self.assertEqual(response.status, 404)
+            self.assertNotEqual(response.getheader("Content-Type"), "text/html")
+            with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as raw_socket:
+                raw_socket.sendall(
+                    f"HEAD /../secret HTTP/1.0\r\nHost: 127.0.0.1:{server.server_port}\r\n\r\n".encode()
+                )
+                raw_response = b""
+                while True:
+                    chunk = raw_socket.recv(4096)
+                    if not chunk:
+                        break
+                    raw_response += chunk
+            raw_headers, raw_body = raw_response.split(b"\r\n\r\n", 1)
+            self.assertIn(b" 403 ", raw_headers.splitlines()[0])
+            self.assertEqual(raw_body, b"")
         finally:
             server.shutdown()
             server.server_close()
@@ -1372,10 +1601,104 @@ class GymPilotTest(unittest.TestCase):
         self.assertIn("data-view", index)
         self.assertIn("apple-touch-icon", index)
 
+    def test_iphone_installation_documentation_covers_verified_webclip_flow(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        guide = (ROOT / "docs" / "gympilot-iphone-installation.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "gym" / "SKILL.md").read_text(encoding="utf-8")
+        guide_link = "[GymPilot auf einem iPhone installieren](docs/gympilot-iphone-installation.md)"
+        profile_url = "https://192.168.50.10:8765/install/GymPilot-WebClip.mobileconfig"
+        self.assertIn(guide_link, readme)
+        self.assertIn(f"]({profile_url})", readme)
+        self.assertIn(f"]({profile_url})", guide)
+        for field in ("ca_certificate", "webclip_profile_url", "installed", "running", "healthy"):
+            self.assertIn(field, guide)
+        for requirement in (
+            "privaten CA-Schlüssel",
+            "genau eine Nutzlast",
+            "Offline-Kaltstart",
+            "realen iPhone",
+            "nicht signiert",
+        ):
+            self.assertIn(requirement, guide)
+        self.assertIn("webclip_profile_url", skill)
+        self.assertIn("nicht über Safaris „Zum Home-Bildschirm“", skill)
+
+    def test_https_server_delivers_host_specific_apple_webclip_profile(self):
+        gym = load_module()
+        os.environ["HERMES_HOME"] = str(self.home)
+        gym.initialize()
+        material = gym.ensure_local_tls("127.0.0.1")
+        server = gym.make_server(
+            "127.0.0.1", 0,
+            tls_cert=material["server_certificate"],
+            tls_key=material["server_key"],
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        context = ssl.create_default_context(cafile=material["ca_certificate"])
+        try:
+            conn = http.client.HTTPSConnection(
+                "127.0.0.1", server.server_port, context=context, timeout=5,
+            )
+            conn.request("GET", "/install/GymPilot-WebClip.mobileconfig")
+            response = conn.getresponse()
+            body = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(
+                response.getheader("Content-Type"),
+                "application/x-apple-aspen-config",
+            )
+            self.assertEqual(response.getheader("Cache-Control"), "no-store")
+            self.assertEqual(response.getheader("X-Content-Type-Options"), "nosniff")
+            self.assertEqual(int(response.getheader("Content-Length") or 0), len(body))
+
+            profile = plistlib.loads(body)
+            self.assertEqual(profile["PayloadType"], "Configuration")
+            self.assertFalse(profile["PayloadRemovalDisallowed"])
+            self.assertEqual(len(profile["PayloadContent"]), 1)
+            clip = profile["PayloadContent"][0]
+            self.assertEqual(clip["PayloadType"], "com.apple.webClip.managed")
+            self.assertEqual(clip["Label"], "GymPilot")
+            self.assertTrue(clip["FullScreen"])
+            self.assertTrue(clip["IsRemovable"])
+            self.assertTrue(clip["Precomposed"])
+            self.assertEqual(
+                clip["URL"],
+                f"https://127.0.0.1:{server.server_port}/#overview",
+            )
+            self.assertEqual(clip["Icon"], (WEB / "apple-touch-icon-v20.png").read_bytes())
+            all_keys = set(profile) | set(clip)
+            self.assertFalse(
+                all_keys & {
+                    "Password", "PayloadCertificateFileName", "VPN",
+                    "Email", "Restrictions", "PayloadCertificateUUID",
+                }
+            )
+
+            conn.request("HEAD", "/install/GymPilot-WebClip.mobileconfig")
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(
+                response.getheader("Content-Type"),
+                "application/x-apple-aspen-config",
+            )
+            self.assertEqual(int(response.getheader("Content-Length") or 0), len(body))
+            self.assertEqual(response.read(), b"")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(5)
+
+        plain = gym.make_server("127.0.0.1", 0)
+        try:
+            self.assertIsNone(plain.webclip_profile)
+        finally:
+            plain.server_close()
+
     def test_png_icons_are_valid_and_declared(self):
         manifest = json.loads((WEB / "manifest.webmanifest").read_text())
         declared = {Path(icon["src"]).name: icon["sizes"] for icon in manifest["icons"]}
-        expected = {"icon-192.png": 192, "icon-512.png": 512}
+        expected = {"icon-192-v20.png": 192, "icon-512-v20.png": 512}
         self.assertEqual(set(expected), set(declared))
         svg = (WEB / "icons" / "icon.svg").read_text()
         self.assertIn('id="icon-background"', svg)
@@ -1387,6 +1710,13 @@ class GymPilotTest(unittest.TestCase):
             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
             width, height = struct.unpack(">II", data[16:24])
             self.assertEqual((width, height), (size, size))
+            if name != "favicon-32.png":
+                self.assertEqual(data[25], 2, f"{name} must be an opaque RGB PNG")
+        for name in ("apple-touch-icon.png", "apple-touch-icon-precomposed.png"):
+            data = (WEB / name).read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(struct.unpack(">II", data[16:24]), (180, 180))
+            self.assertEqual(data[25], 2, f"{name} must be an opaque RGB PNG")
 
     def test_equipment_alias_is_validated_stored_and_exported(self):
         self.cli("init")
@@ -1747,7 +2077,7 @@ class GymPilotTest(unittest.TestCase):
 
     def test_skill_declares_bare_gym_entrypoint_and_home_command(self):
         skill = (ROOT / "skills" / "gym" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("version: 0.1.0-alpha.9", skill)
+        self.assertIn("version: 0.1.0-alpha.10", skill)
         self.assertIn("## `/gym`: stabiler Einstieg", skill)
         self.assertIn('python3 "$GYM_CLI" --json home', skill)
         self.assertIn("loginctl enable-linger BENUTZER", skill)

@@ -27,6 +27,8 @@ const appSource = fs.readFileSync('skills/gym/assets/web/app.js', 'utf8');
 vm.runInThisContext(`${appSource}\nglobalThis.__gymPilotTest = {
   selectView, exerciseCard, volumeChart, historyRows,
   resolveDashboardSnapshot, dashboardStatusText, fetchLiveDashboard, createDashboardStore, createIndexedDbDriver,
+  createCacheStorageDriver, createMirroredDashboardDriver,
+  fetchDashboardWithTimeout,
   updateDashboardStatus, clearDashboardSnapshot, validDashboardSnapshot,
   setUnits: value => { displayUnits = value; }
 };`);
@@ -223,11 +225,17 @@ assert.equal(protectedClearCount, 1);
 assert.equal(protectedSnapshot, null);
 
 const records = new Map();
+const dashboardPolicyState = new Map();
+const dashboardPolicyStorage = {
+  getItem(key) { return dashboardPolicyState.get(key) ?? null; },
+  setItem(key, value) { dashboardPolicyState.set(key, value); },
+  removeItem(key) { dashboardPolicyState.delete(key); },
+};
 const dashboardStore = __gymPilotTest.createDashboardStore({
   async get(key) { return records.get(key) ?? null; },
   async put(key, value) { records.set(key, value); },
   async delete(key) { records.delete(key); },
-});
+}, dashboardPolicyStorage);
 await dashboardStore.write(cachedSnapshot);
 assert.equal(await dashboardStore.read(), cachedSnapshot);
 await dashboardStore.clear();
@@ -236,6 +244,133 @@ await assert.rejects(
   dashboardStore.write({...cachedSnapshot, oversized: 'x'.repeat(2_100_000)}),
   /zu groß/,
 );
+
+const fallbackPolicyState = new Map();
+const fallbackPolicyStorage = {
+  getItem(key) { return fallbackPolicyState.get(key) ?? null; },
+  setItem(key, value) { fallbackPolicyState.set(key, value); },
+  removeItem(key) { fallbackPolicyState.delete(key); },
+};
+const unavailableIndexedDb = {
+  async get() { throw new Error('IndexedDB unavailable'); },
+  async put() { throw new Error('IndexedDB unavailable'); },
+  async delete() { throw new Error('IndexedDB unavailable'); },
+};
+const fallbackWriter = __gymPilotTest.createDashboardStore(unavailableIndexedDb, fallbackPolicyStorage);
+await fallbackWriter.write(cachedSnapshot);
+const fallbackReader = __gymPilotTest.createDashboardStore(unavailableIndexedDb, fallbackPolicyStorage);
+assert.deepEqual(await fallbackReader.read(), cachedSnapshot);
+await assert.rejects(fallbackReader.clear(), /IndexedDB unavailable/);
+assert.equal(await fallbackReader.read(), null);
+
+const stalePrimary = {...cachedSnapshot, saved_at: '2026-08-08T14:00:00.000Z'};
+const newerFallback = {...cachedSnapshot, saved_at: '2026-08-08T19:00:00.000Z'};
+const staleFallbackPolicyState = new Map();
+const staleFallbackPolicy = {
+  getItem(key) { return staleFallbackPolicyState.get(key) ?? null; },
+  setItem(key, value) { staleFallbackPolicyState.set(key, value); },
+  removeItem(key) { staleFallbackPolicyState.delete(key); },
+};
+const stalePrimaryDriver = {
+  async get() { return stalePrimary; },
+  async put() { throw new Error('IndexedDB write failed'); },
+  async delete() { throw new Error('IndexedDB delete failed'); },
+};
+const fallbackAfterPrimaryFailure = __gymPilotTest.createDashboardStore(stalePrimaryDriver, staleFallbackPolicy);
+await fallbackAfterPrimaryFailure.write(newerFallback);
+const restartedFallbackStore = __gymPilotTest.createDashboardStore(stalePrimaryDriver, staleFallbackPolicy);
+assert.deepEqual(await restartedFallbackStore.read(), newerFallback);
+
+const unclearedFallbackState = new Map([
+  ['gympilot-dashboard-offline-snapshot:initial', JSON.stringify(cachedSnapshot)],
+]);
+const unclearedFallbackStore = __gymPilotTest.createDashboardStore({
+  async get() { return cachedSnapshot; },
+  async put() {},
+  async delete() {},
+}, {
+  getItem(key) { return unclearedFallbackState.get(key) ?? null; },
+  setItem() { throw new Error('marker denied'); },
+  removeItem(key) {
+    if (key.startsWith('gympilot-dashboard-offline-snapshot:')) throw new Error('fallback delete denied');
+    unclearedFallbackState.delete(key);
+  },
+});
+await assert.rejects(unclearedFallbackStore.clear(), /fallback delete denied|Sperrmarke/);
+
+const unavailablePolicyStore = __gymPilotTest.createDashboardStore({
+  async get() { return cachedSnapshot; },
+  async put() {},
+  async delete() {},
+}, null);
+assert.equal(await unavailablePolicyStore.read(), null);
+await assert.rejects(unavailablePolicyStore.clear(), /Richtlinienspeicher|Fallback/);
+
+const durableCacheBodies = new Map();
+const mirrorPolicyState = new Map();
+const mirrorPolicyStorage = {
+  getItem(key) { return mirrorPolicyState.get(key) ?? null; },
+  setItem(key, value) { mirrorPolicyState.set(key, value); },
+  removeItem(key) { mirrorPolicyState.delete(key); },
+};
+const durableCacheStorage = {
+  async open() {
+    return {
+      async match(request) {
+        const body = durableCacheBodies.get(String(request));
+        return body === undefined ? undefined : new Response(body, {headers: {'Content-Type': 'application/json'}});
+      },
+      async put(request, response) { durableCacheBodies.set(String(request), await response.text()); },
+      async delete(request) { return durableCacheBodies.delete(String(request)); },
+    };
+  },
+};
+const volatileRecords = new Map();
+const firstMirroredStore = __gymPilotTest.createDashboardStore(
+  __gymPilotTest.createMirroredDashboardDriver([
+    {
+      async get(key) { return volatileRecords.get(key) ?? null; },
+      async put(key, value) { volatileRecords.set(key, value); },
+      async delete(key) { volatileRecords.delete(key); },
+    },
+    __gymPilotTest.createCacheStorageDriver(durableCacheStorage),
+  ]),
+  mirrorPolicyStorage,
+);
+await firstMirroredStore.write(cachedSnapshot);
+volatileRecords.clear();
+mirrorPolicyState.delete('gympilot-dashboard-offline-snapshot');
+const coldMirroredStore = __gymPilotTest.createDashboardStore(
+  __gymPilotTest.createMirroredDashboardDriver([
+    {
+      async get(key) { return volatileRecords.get(key) ?? null; },
+      async put(key, value) { volatileRecords.set(key, value); },
+      async delete(key) { volatileRecords.delete(key); },
+    },
+    __gymPilotTest.createCacheStorageDriver(durableCacheStorage),
+  ]),
+  mirrorPolicyStorage,
+);
+assert.deepEqual(await coldMirroredStore.read(), cachedSnapshot);
+
+let pendingFetchAborted = false;
+const timedOutFetch = __gymPilotTest.fetchDashboardWithTimeout(signal => new Promise(() => {
+  signal.addEventListener('abort', () => {
+    pendingFetchAborted = true;
+  }, {once: true});
+}), 10);
+let timedOutError = null;
+try { await timedOutFetch; }
+catch (error) { timedOutError = error; }
+assert.equal(timedOutError?.name, 'AbortError');
+assert.equal(pendingFetchAborted, true);
+
+const deadlineFallback = await __gymPilotTest.resolveDashboardSnapshot(
+  () => __gymPilotTest.fetchDashboardWithTimeout(() => new Promise(() => {}), 10),
+  coldMirroredStore,
+);
+assert.equal(deadlineFallback.offline, true);
+assert.equal(deadlineFallback.snapshot.today.plan.length, 1);
 
 const policyState = new Map();
 const deletionFailureStore = __gymPilotTest.createDashboardStore({
@@ -284,7 +419,7 @@ finishStaleWrite();
 await assert.rejects(staleWrite, /ungültig/i);
 await racingClear;
 assert.equal(await racingStore.read(), null);
-assert.equal(racingPolicy.get('gympilot-dashboard-offline-blocked'), '1');
+assert.ok(racingPolicy.get('gympilot-dashboard-offline-blocked'));
 
 let releaseOldFetch;
 const oldFetchGate = new Promise(resolve => { releaseOldFetch = resolve; });
@@ -308,7 +443,83 @@ await epochStore.clear();
 releaseOldFetch();
 await assert.rejects(oldFetch, /ungültig/i);
 assert.equal(await epochStore.read(), null);
-assert.equal(epochPolicy.get('gympilot-dashboard-offline-blocked'), '1');
+assert.ok(epochPolicy.get('gympilot-dashboard-offline-blocked'));
+
+const crossContextPolicyState = new Map();
+const crossContextPolicy = {
+  getItem(key) { return crossContextPolicyState.get(key) ?? null; },
+  setItem(key, value) { crossContextPolicyState.set(key, value); },
+  removeItem(key) { crossContextPolicyState.delete(key); },
+};
+const crossContextRecords = new Map();
+let releaseCrossContextWrite;
+let crossContextWriteStarted;
+const crossContextWriteGate = new Promise(resolve => { releaseCrossContextWrite = resolve; });
+const crossContextStarted = new Promise(resolve => { crossContextWriteStarted = resolve; });
+const writerStore = __gymPilotTest.createDashboardStore({
+  async get(key) { return crossContextRecords.get(key) ?? null; },
+  async put(key, value) {
+    crossContextWriteStarted();
+    await crossContextWriteGate;
+    crossContextRecords.set(key, value);
+  },
+  async delete(key) { crossContextRecords.delete(key); },
+}, crossContextPolicy);
+const clearingStore = __gymPilotTest.createDashboardStore({
+  async get(key) { return crossContextRecords.get(key) ?? null; },
+  async put(key, value) { crossContextRecords.set(key, value); },
+  async delete(key) { crossContextRecords.delete(key); },
+}, crossContextPolicy);
+const crossContextWrite = writerStore.write(cachedSnapshot);
+await crossContextStarted;
+await clearingStore.clear();
+releaseCrossContextWrite();
+await assert.rejects(crossContextWrite, /Sperre|ungültig/i);
+assert.ok(crossContextPolicyState.get('gympilot-dashboard-offline-blocked'));
+assert.equal(crossContextRecords.has('latest'), false);
+assert.equal(await writerStore.read(), null);
+
+const threeContextPolicyState = new Map();
+const threeContextPolicy = {
+  getItem(key) { return threeContextPolicyState.get(key) ?? null; },
+  setItem(key, value) { threeContextPolicyState.set(key, value); },
+  removeItem(key) { threeContextPolicyState.delete(key); },
+};
+const threeContextRecords = new Map();
+let releaseOldWriter;
+let oldWriterStarted;
+const oldWriterGate = new Promise(resolve => { releaseOldWriter = resolve; });
+const oldWriterReady = new Promise(resolve => { oldWriterStarted = resolve; });
+const oldWriterStore = __gymPilotTest.createDashboardStore({
+  async get(key) { return threeContextRecords.get(key) ?? null; },
+  async put(key, value) {
+    oldWriterStarted();
+    await oldWriterGate;
+    threeContextRecords.set(key, value);
+  },
+  async delete(key) { threeContextRecords.delete(key); },
+}, threeContextPolicy);
+const blockerStore = __gymPilotTest.createDashboardStore({
+  async get(key) { return threeContextRecords.get(key) ?? null; },
+  async put(key, value) { threeContextRecords.set(key, value); },
+  async delete(key) { threeContextRecords.delete(key); },
+}, threeContextPolicy);
+const newWriterStore = __gymPilotTest.createDashboardStore({
+  async get(key) { return threeContextRecords.get(key) ?? null; },
+  async put(key, value) { threeContextRecords.set(key, value); },
+  async delete(key) { threeContextRecords.delete(key); },
+}, threeContextPolicy);
+const oldSnapshot = {...cachedSnapshot, saved_at: '2026-08-08T18:00:00.000Z'};
+const newSnapshot = {...cachedSnapshot, saved_at: '2026-08-08T20:00:00.000Z'};
+const staleThreeContextWrite = oldWriterStore.write(oldSnapshot);
+await oldWriterReady;
+await blockerStore.clear();
+const newEpoch = newWriterStore.policyEpoch();
+const newAuthorization = await newWriterStore.allowWrites(newEpoch);
+await newWriterStore.write(newSnapshot, newAuthorization);
+releaseOldWriter();
+await assert.rejects(staleThreeContextWrite, /Sperre|ungültig/i);
+assert.deepEqual(await newWriterStore.read(), newSnapshot);
 
 const totalFailureStore = __gymPilotTest.createDashboardStore({
   async get() { return cachedSnapshot; },
@@ -403,6 +614,17 @@ assert.match(history, /14\.767,5 kg/);
 
 const index = fs.readFileSync('skills/gym/assets/web/index.html', 'utf8');
 const styles = fs.readFileSync('skills/gym/assets/web/styles.css', 'utf8');
+const manifest = JSON.parse(fs.readFileSync('skills/gym/assets/web/manifest.webmanifest', 'utf8'));
+assert.equal(manifest.id, '/gympilot-v20');
+assert.equal(manifest.start_url, '/?app=gympilot-v20#overview');
+assert.ok(manifest.icons.every(icon => icon.src.includes('-v20.')));
+assert.match(index, /apple-touch-icon-v20\.png/);
+assert.match(index, /apple-touch-icon-precomposed-v20\.png/);
+assert.match(index, /manifest\.webmanifest\?v=20/);
+assert.match(index, /rel="icon"[^>]+href="\/favicon\.ico"/);
+for (const file of ['apple-touch-icon-v20.png', 'apple-touch-icon-precomposed-v20.png', 'icons/icon-192-v20.png', 'icons/icon-512-v20.png']) {
+  assert.equal(fs.existsSync(`skills/gym/assets/web/${file}`), true, `${file} must exist`);
+}
 for (const name of viewNames) {
   assert.match(index, new RegExp(`data-view="${name}"`));
   assert.match(index, new RegExp(`data-target="${name}"`));
@@ -413,8 +635,12 @@ assert.match(index, /class="brand"[^>]*>.*<strong>GymPilot<\/strong>/);
 assert.doesNotMatch(index, /Training Cockpit/);
 assert.match(index, /<button[^>]+id="dataStatus"/);
 assert.ok(styles.includes('.view[hidden]{display:none}'));
-assert.match(appSource, /resolveDashboardSnapshot\(fetchLiveDashboard, dashboardStore\)/);
-assert.match(appSource, /createDashboardStore\(createIndexedDbDriver\(globalThis\.indexedDB\)\)/);
+assert.match(appSource, /fetchDashboardWithTimeout\(signal => fetchLiveDashboard\(api, dashboardStore, signal\)\)/);
+assert.match(appSource, /createMirroredDashboardDriver\(dashboardDrivers\)/);
+assert.match(appSource, /createCacheStorageDriver\(globalThis\.caches\)/);
+assert.match(appSource, /GYMPILOT_WEB_BUILD\s*=\s*'diagnostic-v20'/);
+assert.match(appSource, /collectGymPilotDiagnostics/);
+assert.match(appSource, /dashboardStore\.diagnostics/);
 for (const forbiddenPath of ['/api/session/start', '/api/set', '/api/session/finish', '/api/plan/']) {
   assert.equal(appSource.includes(forbiddenPath), false);
 }
@@ -428,13 +654,16 @@ assert.match(appSource, /document\.addEventListener\('visibilitychange'/);
 let fetchHandler;
 let cacheTouched = false;
 let fetchOptions;
+let globalCacheMatchCalls = 0;
+const privateCacheResponse = {ok: true, source: 'private-cache'};
+const networkResponse = {ok: true, source: 'network', clone() { return this; }};
 const swContext = vm.createContext({
   URL,
   location: {origin: 'http://127.0.0.1:8765'},
-  fetch: async (_request, options) => { fetchOptions = options; return {ok: true}; },
+  fetch: async (_request, options) => { fetchOptions = options; return networkResponse; },
   caches: {
-    async match() { cacheTouched = true; return null; },
-    async open() { cacheTouched = true; return {addAll: async () => {}, put: async () => {}}; },
+    async match() { globalCacheMatchCalls += 1; return privateCacheResponse; },
+    async open() { cacheTouched = true; return {addAll: async () => {}, match: async () => null, put: async () => {}}; },
     async keys() { cacheTouched = true; return []; },
     async delete() { cacheTouched = true; return true; },
   },
@@ -445,7 +674,10 @@ const swContext = vm.createContext({
   },
 });
 vm.runInContext(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), swContext);
-assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v11/);
+assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v22/);
+assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /apple-touch-icon-v20\.png/);
+assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /icon-512-v20\.png/);
+assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /['"]\/favicon\.ico['"]/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /cache:\s*['"]reload['"]/);
 assert.equal(typeof fetchHandler, 'function');
 let responsePromise;
@@ -457,9 +689,35 @@ await responsePromise;
 assert.equal(fetchOptions.cache, 'no-store');
 assert.equal(cacheTouched, false);
 
+for (const mode of ['navigate', 'same-origin']) {
+  cacheTouched = false;
+  fetchOptions = undefined;
+  let installResponse;
+  fetchHandler({
+    request: {
+      url: 'http://127.0.0.1:8765/install/GymPilot-WebClip.mobileconfig',
+      method: 'GET',
+      mode,
+    },
+    respondWith(promise) { installResponse = promise; },
+  });
+  assert.equal(await installResponse, networkResponse);
+  assert.equal(fetchOptions.cache, 'no-store');
+  assert.equal(cacheTouched, false, `install request in ${mode} mode must bypass Cache Storage`);
+}
+
+let privatePathResponse;
+fetchHandler({
+  request: {url: 'http://127.0.0.1:8765/__gympilot_private_dashboard_snapshot__', method: 'GET', mode: 'same-origin'},
+  respondWith(promise) { privatePathResponse = promise; },
+});
+assert.equal(await privatePathResponse, networkResponse);
+assert.equal(globalCacheMatchCalls, 0);
+
 let coldFetchHandler;
 let activateHandler;
 let releaseClaim;
+const deletedCaches = [];
 const claimPromise = new Promise(resolve => { releaseClaim = resolve; });
 const shellResponse = {ok: true, source: 'cached-index'};
 const coldContext = vm.createContext({
@@ -468,10 +726,10 @@ const coldContext = vm.createContext({
   location: {origin: 'http://127.0.0.1:8765'},
   fetch: async () => { throw new TypeError('server offline'); },
   caches: {
-    async match(request) { return request === '/index.html' ? shellResponse : null; },
-    async open() { return {put: async () => {}}; },
-    async keys() { return ['gympilot-shell-v8', 'gympilot-shell-v9']; },
-    async delete() { return true; },
+    async match() { return null; },
+    async open() { return {match: async request => request === '/index.html' ? shellResponse : null, put: async () => {}}; },
+    async keys() { return ['gympilot-shell-v8', 'gympilot-shell-v9', 'gympilot-private-dashboard-v1']; },
+    async delete(key) { deletedCaches.push(key); return true; },
   },
   self: {
     clients: {claim: () => claimPromise},
@@ -500,5 +758,22 @@ assert.equal(activationFinished, false);
 releaseClaim();
 await activationPromise;
 assert.equal(activationFinished, true);
+assert.deepEqual(deletedCaches.sort(), ['gympilot-shell-v8', 'gympilot-shell-v9']);
+
+const indexHtml = fs.readFileSync('skills/gym/assets/web/index.html', 'utf8');
+assert.match(indexHtml, /rel="apple-touch-icon"[^>]+href="\/apple-touch-icon-v20\.png"/);
+assert.match(indexHtml, /rel="apple-touch-icon-precomposed"[^>]+href="\/apple-touch-icon-precomposed-v20\.png"/);
+assert.match(indexHtml, /id="diagnostics"/);
+assert.match(indexHtml, /id="diagnosticsOutput"/);
+for (const iconPath of [
+  'skills/gym/assets/web/apple-touch-icon.png',
+  'skills/gym/assets/web/apple-touch-icon-precomposed.png',
+  'skills/gym/assets/web/icons/apple-touch-icon.png',
+  'skills/gym/assets/web/icons/icon-192.png',
+  'skills/gym/assets/web/icons/icon-512.png',
+]) {
+  const png = fs.readFileSync(iconPath);
+  assert.equal(png.readUInt8(25), 2, `${iconPath} must be an opaque RGB PNG`);
+}
 
 console.log('web runtime: cockpit navigation, comparison cards, charts, history, units, and API cache bypass ok');
