@@ -1,8 +1,9 @@
-const CACHE = 'gympilot-shell-v23';
+const CACHE = 'gympilot-shell-v25';
 const SHELL = [
   '/',
   '/index.html',
   '/styles.css',
+  '/theme.js',
   '/app.js',
   '/manifest.webmanifest?v=20',
   '/icons/icon.svg',

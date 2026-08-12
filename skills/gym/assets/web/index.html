@@ -7,6 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="GymPilot">
   <title>GymPilot</title>
+  <script src="/theme.js"></script>
   <link rel="manifest" href="/manifest.webmanifest?v=20">
   <link rel="icon" type="image/x-icon" sizes="any" href="/favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
@@ -17,7 +18,7 @@
 <body>
 <header class="app-header">
   <div class="brand"><img src="/icons/icon.svg" alt="" width="32" height="32"><strong>GymPilot</strong></div>
-  <div class="connection"><button id="logout" hidden>Abmelden</button><button id="dataStatus" class="data-status" type="button" title="Auswertungen aktualisieren">Aktuell</button><span id="healthDot" class="status-dot" aria-hidden="true"></span><span id="health" class="sr-only">Lokal</span></div>
+  <div class="connection"><button id="logout" hidden>Abmelden</button><button id="themeToggle" class="theme-toggle" type="button" role="switch" aria-label="Dunkelmodus" aria-checked="true" title="Darstellung wechseln"><span class="theme-thumb" aria-hidden="true"></span><span class="theme-option theme-sun" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42"/></svg></span><span class="theme-option theme-moon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20.2 15.3A8.5 8.5 0 0 1 8.7 3.8a8.5 8.5 0 1 0 11.5 11.5Z"/></svg></span></button><button id="dataStatus" class="data-status" type="button" title="Auswertungen aktualisieren">Aktuell</button><span id="healthDot" class="status-dot" aria-hidden="true"></span><span id="health" class="sr-only">Lokal</span></div>
 </header>
 <dialog id="login"><form id="loginForm"><h2>GymPilot entsperren</h2><p>Das Passwort bleibt auf dieser lokalen Verbindung.</p><label for="password">Passwort</label><input id="password" type="password" autocomplete="current-password" required><button>Anmelden</button><small id="loginError"></small></form></dialog>
 <dialog id="diagnostics"><form method="dialog"><div class="diagnostics-head"><div><span class="eyebrow">GERÄTEDIAGNOSE</span><h2>GymPilot-Speicher</h2></div><button value="close" aria-label="Schließen">×</button></div><p>Diese Angaben enthalten keine Trainingswerte oder Zugangsdaten.</p><pre id="diagnosticsOutput">Diagnose wird geladen …</pre><div class="diagnostics-actions"><button id="refreshDashboard" value="refresh">Online aktualisieren</button><button value="close">Schließen</button></div></form></dialog>

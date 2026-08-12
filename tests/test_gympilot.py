@@ -334,6 +334,7 @@ class GymPilotTest(unittest.TestCase):
             "scripts/gympilot.py",
             "scripts/gympilot_generator.py",
             "assets/web/index.html",
+            "assets/web/theme.js",
             "assets/web/app.js",
             "assets/web/styles.css",
             "assets/web/manifest.webmanifest",

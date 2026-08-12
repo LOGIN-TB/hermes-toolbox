@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-const GYMPILOT_WEB_BUILD = 'diagnostic-v20';
+const GYMPILOT_WEB_BUILD = 'diagnostic-v22';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 let displayUnits = 'metric';
 let dashboardData = null;
@@ -8,6 +8,22 @@ let lastDashboardError = null;
 let lastOfflineStoreError = null;
 const dayNames = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
 const dayShort = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+const THEME_KEY = 'gympilot-theme';
+const nextTheme = theme => theme === 'light' ? 'dark' : 'light';
+function applyTheme(theme) {
+  const selected = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = selected;
+  const meta = document.querySelector?.('meta[name="theme-color"]');
+  if (meta) meta.content = selected === 'light' ? '#f5f6fa' : '#08090d';
+  const toggle = $('themeToggle');
+  if (toggle?.setAttribute) {
+    const light = selected === 'light';
+    toggle.setAttribute('aria-checked', String(!light));
+    toggle.setAttribute('aria-label', 'Dunkelmodus');
+    toggle.title = light ? 'Dunkle Darstellung' : 'Helle Darstellung';
+  }
+  return selected;
+}
 const number = (value, digits = 1) => new Intl.NumberFormat('de-DE', {maximumFractionDigits: digits}).format(Number(value) || 0);
 const weightValue = value => displayUnits === 'imperial' ? Number(value) / 0.45359237 : Number(value);
 const weight = value => number(weightValue(value), 2);
@@ -622,6 +638,11 @@ function showUnavailable() {
 }
 
 async function init() {
+  applyTheme(document.documentElement.dataset.theme);
+  $('themeToggle').addEventListener('click', () => {
+    const selected = applyTheme(nextTheme(document.documentElement.dataset.theme));
+    try { localStorage.setItem(THEME_KEY, selected); } catch (_error) {}
+  });
   window.addEventListener('hashchange', () => selectView(location.hash.slice(1)));
   document.querySelectorAll('nav [data-target]').forEach(link => link.addEventListener('click', () => selectView(link.dataset.target)));
   selectView(location.hash.slice(1));

@@ -12,7 +12,7 @@ const links = viewNames.map(name => ({
 }));
 
 globalThis.document = {
-  documentElement: {lang: 'de'},
+  documentElement: {lang: 'de', dataset: {}},
   addEventListener() {},
   getElementById(id) { return elements[id] ?? {}; },
   querySelectorAll(selector) {
@@ -30,7 +30,8 @@ vm.runInThisContext(`${appSource}\nglobalThis.__gymPilotTest = {
   createCacheStorageDriver, createMirroredDashboardDriver,
   fetchDashboardWithTimeout,
   updateDashboardStatus, clearDashboardSnapshot, validDashboardSnapshot,
-  setUnits: value => { displayUnits = value; }
+  setUnits: value => { displayUnits = value; },
+  applyTheme, nextTheme,
 };`);
 
 const routineSummary = {
@@ -109,6 +110,10 @@ function fakeClassList() {
 }
 elements.dataStatus = {textContent: '', classList: fakeClassList()};
 elements.healthDot = {classList: fakeClassList()};
+elements.themeToggle = {
+  attributes: {},
+  setAttribute(name, value) { this.attributes[name] = value; },
+};
 __gymPilotTest.updateDashboardStatus(offline);
 assert.match(elements.dataStatus.textContent, /Offline/);
 assert.equal(elements.dataStatus.classList.contains('offline'), true);
@@ -635,11 +640,47 @@ assert.doesNotMatch(index, /Jeder Satz, jedes Gewicht und jede Wiederholung übe
 assert.match(index, /class="brand"[^>]*>.*<strong>GymPilot<\/strong>/);
 assert.doesNotMatch(index, /Training Cockpit/);
 assert.match(index, /<button[^>]+id="dataStatus"/);
+assert.match(index, /<button[^>]+id="themeToggle"[^>]+role="switch"[^>]+aria-label="Dunkelmodus"[^>]+aria-checked="true"/);
+assert.match(index, /class="theme-thumb"/);
+assert.match(index, /class="theme-option theme-sun"/);
+assert.match(index, /class="theme-option theme-moon"/);
+assert.match(index, /<script src="\/theme\.js"><\/script>/);
 assert.ok(styles.includes('.view[hidden]{display:none}'));
+assert.match(styles, /html\[data-theme="light"\]/);
+assert.match(styles, /\.theme-toggle/);
+assert.match(styles, /width:72px/);
+assert.match(styles, /\.theme-toggle\{[^}]*height:44px/);
+assert.match(styles, /html\[data-theme="light"\] \.day-selector button\.active span,[^}]*color:var\(--accent-2\)/);
+assert.match(styles, /html\[data-theme="light"\] \.data-status\.offline\{color:#795000\}/);
+assert.match(styles, /html\[data-theme="light"\]\{[^}]*--muted-2:#656875/);
+assert.match(styles, /html\[data-theme="light"\] nav a\{color:#656875\}/);
+assert.match(styles, /html\[data-theme="light"\]\{[^}]*--danger:#b02f3c/);
+assert.match(styles, /html\[data-theme="light"\] dialog input\{border-color:#656875\}/);
+assert.match(styles, /html\[data-theme="light"\] \.theme-toggle\{border-color:#656875!important;background:var\(--accent-soft\)!important\}/);
+assert.match(styles, /html\[data-theme="light"\] \.theme-thumb\{[^}]*background:var\(--accent-2\)/);
+assert.match(styles, /html\[data-theme="light"\] \.theme-sun\{color:#fff\}/);
+assert.match(styles, /\.connection #logout\{min-width:64px;height:44px/);
+assert.match(styles, /\.connection #logout\[hidden\]\{display:none\}/);
+assert.match(styles, /\.connection:has\(#logout:not\(\[hidden\]\)\) \.data-status\{display:none\}/);
+assert.doesNotMatch(styles, /\.connection #logout\{display:none\}/);
+assert.equal(__gymPilotTest.nextTheme('dark'), 'light');
+assert.equal(__gymPilotTest.nextTheme('light'), 'dark');
+const themeMeta = {content: ''};
+document.querySelector = selector => selector === 'meta[name="theme-color"]' ? themeMeta : null;
+__gymPilotTest.applyTheme('light');
+assert.equal(document.documentElement.dataset.theme, 'light');
+assert.equal(themeMeta.content, '#f5f6fa');
+assert.equal(elements.themeToggle.attributes['aria-checked'], 'false');
+assert.equal(elements.themeToggle.attributes['aria-label'], 'Dunkelmodus');
+__gymPilotTest.applyTheme('dark');
+assert.equal(document.documentElement.dataset.theme, 'dark');
+assert.equal(themeMeta.content, '#08090d');
+assert.equal(elements.themeToggle.attributes['aria-checked'], 'true');
+assert.equal(elements.themeToggle.attributes['aria-label'], 'Dunkelmodus');
 assert.match(appSource, /fetchDashboardWithTimeout\(signal => fetchLiveDashboard\(api, dashboardStore, signal\)\)/);
 assert.match(appSource, /createMirroredDashboardDriver\(dashboardDrivers\)/);
 assert.match(appSource, /createCacheStorageDriver\(globalThis\.caches\)/);
-assert.match(appSource, /GYMPILOT_WEB_BUILD\s*=\s*'diagnostic-v20'/);
+assert.match(appSource, /GYMPILOT_WEB_BUILD\s*=\s*'diagnostic-v22'/);
 assert.match(appSource, /collectGymPilotDiagnostics/);
 assert.match(appSource, /dashboardStore\.diagnostics/);
 for (const forbiddenPath of ['/api/session/start', '/api/set', '/api/session/finish', '/api/plan/']) {
@@ -675,7 +716,8 @@ const swContext = vm.createContext({
   },
 });
 vm.runInContext(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), swContext);
-assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v23/);
+assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v25/);
+assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /['"]\/theme\.js['"]/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /apple-touch-icon-v20\.png/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /icon-512-v20\.png/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /['"]\/favicon\.ico['"]/);
