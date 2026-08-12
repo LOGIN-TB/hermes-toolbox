@@ -23,7 +23,11 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install pinned Hermes Agent
-        run: python -m pip install "git+https://github.com/NousResearch/hermes-agent.git@37d5fca92666347877255d7603a995fe86298788"
+        run: |
+          git clone https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent
+          git -C /tmp/hermes-agent checkout 37d5fca92666347877255d7603a995fe86298788
+          test "$(git -C /tmp/hermes-agent rev-parse HEAD)" = 37d5fca92666347877255d7603a995fe86298788
+          python -m pip install -e /tmp/hermes-agent
       - name: Inspect and install every curated document skill
         run: >-
           python tests/validate_skills.py --hermes-smoke

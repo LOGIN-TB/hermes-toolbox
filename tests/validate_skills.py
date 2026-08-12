@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from typing import NoReturn
 from urllib.parse import quote
 from urllib.parse import urlsplit
@@ -306,6 +307,24 @@ def smoke_with_hermes(entries: list[dict], hermes: str, base_url: str) -> None:
     base_url = base_url.rstrip("/")
     if not base_url.startswith("https://"):
         fail("--base-url must be an HTTPS URL to an immutable public tree")
+
+    def run_remote(command: list[str], env: dict[str, str], name: str, action: str) -> subprocess.CompletedProcess[str]:
+        last = None
+        for attempt in range(1, 4):
+            result = subprocess.run(
+                command, env=env, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            output = result.stdout.lower()
+            fetch_failed = "could not fetch" in output
+            if result.returncode == 0 and not fetch_failed:
+                return result
+            last = result
+            if not fetch_failed or attempt == 3:
+                break
+            time.sleep(attempt * 2)
+        fail(f"Hermes {action} failed for {name}:\n{last.stdout if last else 'no result'}")
+
     for entry in entries:
         if entry.get("kind") != "curated-document":
             continue
@@ -314,19 +333,16 @@ def smoke_with_hermes(entries: list[dict], hermes: str, base_url: str) -> None:
         with tempfile.TemporaryDirectory(prefix=f"hermes-toolbox-{name}-") as home:
             env = os.environ.copy()
             env["HERMES_HOME"] = home
-            inspect = subprocess.run(
-                [hermes, "skills", "inspect", url], env=env,
-                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            inspect = run_remote(
+                [hermes, "skills", "inspect", url], env, name, "inspect",
             )
-            inspect_failed = "could not fetch" in inspect.stdout.lower() or "error:" in inspect.stdout.lower()
-            if inspect.returncode != 0 or inspect_failed:
+            if "error:" in inspect.stdout.lower():
                 fail(f"Hermes inspect failed for {name}:\n{inspect.stdout}")
-            install = subprocess.run(
+            install = run_remote(
                 [hermes, "skills", "install", url, "--category", "toolbox", "--name", name, "--yes"],
-                env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                env, name, "install",
             )
-            install_failed = "could not fetch" in install.stdout.lower() or "error:" in install.stdout.lower()
-            if install.returncode != 0 or install_failed:
+            if "error:" in install.stdout.lower():
                 fail(f"Hermes install failed for {name}:\n{install.stdout}")
             candidates = list((Path(home) / "skills").rglob(f"{name}/SKILL.md"))
             if len(candidates) != 1:
