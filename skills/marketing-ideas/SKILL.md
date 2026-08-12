@@ -231,7 +231,7 @@ Do not add fake precision merely to fill the table.
 - [ ] Objective, audience, baseline, constraint, and decision are explicit.
 - [ ] Evidence, estimates, hypotheses, and unknowns are separate.
 - [ ] Ideas were screened before scoring.
-- [ ] No idea depends on hidden tracking, spam, manipulation, false proof, or unauthorized assets/data.
+- [ ] No idea depends on hidden tracking, spam, manipulation, false proof, or unauthorized assets or data.
 - [ ] Costs include implementation, media, tools, labor, support, maintenance, compliance, and downside.
 - [ ] Claims, permissions, platform rules, legal/privacy, security, accessibility, and reputation are visible.
 - [ ] Metrics include quality and harm guardrails, not just volume.

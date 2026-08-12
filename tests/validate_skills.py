@@ -26,6 +26,10 @@ CATALOG = SKILLS / "catalog.json"
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 FRONTMATTER_RE = re.compile(r"\A---\n(?P<body>.*?)\n---(?:\n|\Z)", re.DOTALL)
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+HERMES_SUPPORT_REF_RE = re.compile(
+    r"(?:\]\(|`|(?:^|[\s\"']))((?:references|templates|scripts|assets|examples)/[^\s)`\"'<>]+)",
+    re.MULTILINE,
+)
 PRIVATE_PATH_RE = re.compile(
     r"(?:^|[\s`'\"])(?:/(?:Users|home|root)/|[A-Za-z]:\\Users\\)[^\s`'\"]+"
 )
@@ -256,6 +260,12 @@ def validate() -> list[dict]:
             ]
             if packaged_files != ["SKILL.md"]:
                 fail(f"curated document skill {name} may contain only SKILL.md: {packaged_files}")
+            inferred_support = {
+                match.group(1).rstrip(".,;:")
+                for match in HERMES_SUPPORT_REF_RE.finditer(text.replace("\\", "/"))
+            }
+            if inferred_support:
+                fail(f"curated document skill {name} triggers Hermes support-file inference: {sorted(inferred_support)}")
 
         if PRIVATE_PATH_RE.search(text):
             fail(f"workstation-specific absolute path in {name}")

@@ -24,8 +24,14 @@ jobs:
           python-version: '3.11'
       - name: Install pinned Hermes Agent
         run: |
-          git clone https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent
-          git -C /tmp/hermes-agent checkout 37d5fca92666347877255d7603a995fe86298788
+          mkdir /tmp/hermes-agent
+          git -C /tmp/hermes-agent init
+          for attempt in 1 2 3; do
+            git -C /tmp/hermes-agent fetch --depth=1 https://github.com/NousResearch/hermes-agent.git 37d5fca92666347877255d7603a995fe86298788 && break
+            test "$attempt" -lt 3
+            sleep "$((attempt * 2))"
+          done
+          git -C /tmp/hermes-agent checkout --detach FETCH_HEAD
           test "$(git -C /tmp/hermes-agent rev-parse HEAD)" = 37d5fca92666347877255d7603a995fe86298788
           python -m pip install -e /tmp/hermes-agent
       - name: Inspect and install every curated document skill
