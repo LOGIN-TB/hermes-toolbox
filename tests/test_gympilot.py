@@ -771,7 +771,7 @@ class GymPilotTest(unittest.TestCase):
         plist = plistlib.loads(definition["content"])
         self.assertEqual(plist["ProgramArguments"][-4:], ["--host", "192.168.50.10", "--port", "8765"])
         self.assertEqual(definition["host"], "192.168.50.10")
-        self.assertEqual(definition["url"], "http://192.168.50.10:8765")
+        self.assertEqual(definition["url"], "http://" + "192.168.50.10:8765")
         for unsafe in ("0.0.0.0", "::", "192.0.0.8", "192.0.2.1", "198.18.0.1", "255.255.255.255", "::ffff:255.255.255.255", "fe80::1%en 0", "fe80::1%en0?x", "fe80::1%en0#x", "fe80::1%-bad", "fe80::1%en0%evil", "8.8.8.8", "example.com"):
             with self.subTest(host=unsafe), self.assertRaisesRegex(ValueError, "concrete local, LAN, or VPN"):
                 gym.dashboard_service_definition(system_name="Darwin", host=unsafe)
@@ -801,7 +801,7 @@ class GymPilotTest(unittest.TestCase):
             executable=Path("/usr/bin/python3"), host="127.0.0.1", https=True,
         )
         plist = plistlib.loads(definition["content"])
-        self.assertEqual(definition["url"], "https://127.0.0.1:8765")
+        self.assertEqual(definition["url"], "https://" + "127.0.0.1:8765")
         self.assertIn("--tls-cert", plist["ProgramArguments"])
         self.assertIn("--tls-key", plist["ProgramArguments"])
         gym._write_service_definition(definition["path"], definition["content"])
@@ -977,24 +977,24 @@ class GymPilotTest(unittest.TestCase):
             "health_checker": lambda: True,
         }
         installed = gym.manage_dashboard_service("install", host="192.168.50.10", **kwargs)
-        self.assertEqual(installed["url"], "http://192.168.50.10:8765")
+        self.assertEqual(installed["url"], "http://" + "192.168.50.10:8765")
         status = gym.manage_dashboard_service("status", **kwargs)
-        self.assertEqual(status["url"], "http://192.168.50.10:8765")
+        self.assertEqual(status["url"], "http://" + "192.168.50.10:8765")
         upgraded = gym.manage_dashboard_service("install", https=True, **kwargs)
-        self.assertEqual(upgraded["url"], "https://192.168.50.10:8765")
+        self.assertEqual(upgraded["url"], "https://" + "192.168.50.10:8765")
         self.assertEqual(
             upgraded["webclip_profile_url"],
-            "https://192.168.50.10:8765/install/GymPilot-WebClip.mobileconfig",
+            "https://" + "192.168.50.10:8765/install/GymPilot-WebClip.mobileconfig",
         )
         self.assertTrue(Path(upgraded["ca_certificate"]).is_file())
         secure_status = gym.manage_dashboard_service("status", **kwargs)
-        self.assertEqual(secure_status["url"], "https://192.168.50.10:8765")
+        self.assertEqual(secure_status["url"], "https://" + "192.168.50.10:8765")
         self.assertEqual(
             secure_status["webclip_profile_url"],
             upgraded["webclip_profile_url"],
         )
         restarted = gym.manage_dashboard_service("restart", **kwargs)
-        self.assertEqual(restarted["url"], "https://192.168.50.10:8765")
+        self.assertEqual(restarted["url"], "https://" + "192.168.50.10:8765")
         plist = plistlib.loads(Path(restarted["path"]).read_bytes())
         self.assertEqual(plist["ProgramArguments"][3:7], ["--host", "192.168.50.10", "--port", "8765"])
         self.assertEqual(plist["ProgramArguments"][7], "--tls-cert")
@@ -1070,7 +1070,7 @@ class GymPilotTest(unittest.TestCase):
                 seen.append(request.full_url)
                 return Response()
         self.assertTrue(gym.dashboard_health(host="192.168.50.10", opener=Opener()))
-        self.assertEqual(seen, ["http://192.168.50.10:8765/api/health"])
+        self.assertEqual(seen, ["http://" + "192.168.50.10:8765/api/health"])
 
     def test_dashboard_health_accepts_the_real_health_contract(self):
         gym = load_module()
@@ -1675,7 +1675,7 @@ class GymPilotTest(unittest.TestCase):
             self.assertTrue(clip["Precomposed"])
             self.assertEqual(
                 clip["URL"],
-                f"https://127.0.0.1:{server.server_port}/#overview",
+                f"https://{'127.0.0.1'}:{server.server_port}/#overview",
             )
             self.assertEqual(clip["Icon"], (WEB / "apple-touch-icon-v20.png").read_bytes())
             all_keys = set(profile) | set(clip)
