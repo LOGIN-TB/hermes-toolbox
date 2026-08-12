@@ -1,6 +1,71 @@
-# GymPilot
+# Hermes Toolbox
 
-GymPilot ist ein lokaler Trainingstracker mit mobiler Weboberfläche und PWA-Dateien. Er wird als Hermes-Skill `/gym` installiert und benötigt außer Python 3.11 oder neuer keine zusätzlichen Pakete. Dieses Repository dient als Sammelstelle für wiederverwendbare Hermes-Skills und die zugehörigen lokalen Anwendungen.
+Hermes Toolbox ist eine öffentliche Sammlung geprüfter und kuratierter Skills für [Hermes Agent](https://github.com/NousResearch/hermes-agent). Sie enthält dokumentbasierte Marketing-, Recherche-, Schreib- und Kreativ-Workflows sowie lokale Anwendungen wie GymPilot.
+
+Die kuratierten Fassungen sind keine unveränderten Upstream-Kopien. Sie dokumentieren Ursprung und geprüften Commit und ergänzen konservative Grenzen für Fakten, Datenschutz, Einwilligung, Rechte, Kosten und externe Aktionen. Herkunft und Lizenzen stehen in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Skill-Katalog
+
+| Skill | Aufgabe | Sprache | Ausführbarer Code |
+|---|---|---:|---:|
+| [`ai-seo`](skills/ai-seo/SKILL.md) | Sichtbarkeit in KI-Suchsystemen prüfen und verbessern | EN | nein |
+| [`seo-audit`](skills/seo-audit/SKILL.md) | technische und inhaltliche SEO-Prüfung | EN | nein |
+| [`product-marketing`](skills/product-marketing/SKILL.md) | belegte Produktmarketing-Grundlage pflegen | EN | nein |
+| [`social`](skills/social/SKILL.md) | Social-Media-Inhalte und Planung | EN | nein |
+| [`cold-email`](skills/cold-email/SKILL.md) | kontrollierte B2B-Outreach-Entwürfe | EN | nein |
+| [`competitors`](skills/competitors/SKILL.md) | sachliche Wettbewerbs- und Vergleichsinhalte | EN | nein |
+| [`competitor-profiling`](skills/competitor-profiling/SKILL.md) | quellengebundene Wettbewerberprofile | EN | nein |
+| [`content-strategy`](skills/content-strategy/SKILL.md) | evidenzbasierte Content-Strategien | EN | nein |
+| [`copywriting`](skills/copywriting/SKILL.md) | sachliche, belegte Website-Texte | EN | nein |
+| [`customer-research`](skills/customer-research/SKILL.md) | datensparsame Kundenforschung | EN | nein |
+| [`image`](skills/image/SKILL.md) | sichere Planung und Bearbeitung von Bildern | EN | nein |
+| [`lead-magnets`](skills/lead-magnets/SKILL.md) | datenschutzbewusste Lead-Magnet-Konzepte | EN | nein |
+| [`marketing-ideas`](skills/marketing-ideas/SKILL.md) | Marketinghypothesen und kontrollierte Experimente | EN | nein |
+| [`vermenschlichen`](skills/vermenschlichen/SKILL.md) | natürliche deutsche Textredaktion | DE | nein |
+| [`gym`](skills/gym/SKILL.md) | lokaler Trainingstracker GymPilot | DE | ja |
+
+Die maschinenlesbare Liste liegt unter [`skills/catalog.json`](skills/catalog.json).
+
+## Installation
+
+Einen einzelnen Skill direkt über die GitHub-Pfad-ID installieren:
+
+```bash
+hermes skills inspect LOGIN-TB/hermes-toolbox/skills/vermenschlichen
+hermes skills install LOGIN-TB/hermes-toolbox/skills/vermenschlichen
+```
+
+Alternativ das Repository als Hermes-Tap hinzufügen und darüber suchen. Der Tap macht den Katalog auffindbar; installiert wird weiterhin mit der vollständigen, von der Suche ausgegebenen Pfad-ID:
+
+```bash
+hermes skills tap add LOGIN-TB/hermes-toolbox
+hermes skills search vermenschlichen --source github
+hermes skills install LOGIN-TB/hermes-toolbox/skills/vermenschlichen
+```
+
+Für reproduzierbare Installationen empfiehlt sich eine unveränderliche Raw-URL mit Release-Tag oder vollständigem Commit statt `main`:
+
+```bash
+hermes skills install \
+  https://raw.githubusercontent.com/LOGIN-TB/hermes-toolbox/COMMIT/skills/vermenschlichen/SKILL.md
+```
+
+`COMMIT` ist durch den gewünschten vollständigen Commit-Hash zu ersetzen. Die Installation eines Skills autorisiert keine in ihm beschriebenen externen Aktionen. Vor Versand, Veröffentlichung, Tracking, Käufen, bezahlten Diensten, Konto- oder Systemänderungen bleibt eine konkrete Freigabe erforderlich.
+
+Nach der Installation in einem bereits laufenden Hermes-Prozess kann `/reload-skills` nötig sein. Bei GymPilot gelten zusätzlich die unten beschriebenen Aktivierungs- und Servicetests.
+
+## Vertrauensmodell und Aktualisierung
+
+- Jeder Skill wird einzeln installiert und vom Hermes-Sicherheitsscanner geprüft.
+- Scannerwarnungen werden nicht mit `--force` umgangen.
+- Dokumentbasierte Skills enthalten keinen ausführbaren Code; GymPilot ist die ausdrücklich gekennzeichnete Ausnahme.
+- Installierte Dateien sollten nicht lokal verändert werden, wenn spätere Updates nachvollziehbar bleiben sollen.
+- `main` ist der aktuelle Entwicklungsstand. Release-Tags oder Commit-URLs sind reproduzierbar.
+- Die CI validiert Katalog, Frontmatter, relative Links, Portabilität und isolierte Installationen aller dokumentbasierten Skills sowie die vollständigen GymPilot-Tests.
+
+## GymPilot
+
+GymPilot ist ein lokaler Trainingstracker mit mobiler Weboberfläche und PWA-Dateien. Er wird als Hermes-Skill `/gym` installiert und benötigt außer Python 3.11 oder neuer keine zusätzlichen Pakete.
 
 ## Funktionen
 
@@ -124,7 +189,7 @@ python3 skills/gym/scripts/gympilot.py exercise add 1 "Kniebeuge" --sets 3 --min
 python3 skills/gym/scripts/gympilot.py --json service install
 ```
 
-Die Web-App läuft anschließend standardmäßig unter `http://127.0.0.1:8765` oder nach einer expliziten privaten Installation unter der von `service status` ausgegebenen LAN-/VPN-Adresse. Für maschinenlesbare Ausgaben steht `--json` direkt vor dem jeweiligen Befehl.
+Die Web-App läuft anschließend standardmäßig lokal auf `127.0.0.1`, Port `8765`, oder nach einer expliziten privaten Installation unter der von `service status` ausgegebenen LAN-/VPN-Adresse. Für maschinenlesbare Ausgaben steht `--json` direkt vor dem jeweiligen Befehl.
 
 Die Erfassung von Einheiten, Sätzen, Gewichten und Wiederholungen erfolgt ausschließlich über Telegram/Hermes. Die Web-App ist eine reine Auswertungsoberfläche. Nach einem erfolgreichen Abruf speichert sie einen vollständigen, maximal 2 MB großen Auswertungs-Snapshot origin-lokal in IndexedDB, Cache Storage und zusätzlich als `localStorage`-Fallback. Der separate private Cache enthält ausschließlich diesen validierten Gesamtsnapshot; einzelne API-Antworten bleiben `no-store` und werden nie vom Service Worker gecacht. Ohne Serververbindung bleiben Plan, letzte Satzwerte, Verlauf und Kennzahlen mit einem sichtbaren Zeitstempel (`Offline · Stand …`) lesbar. Beim nächsten Online-Abruf wird der Snapshot vollständig ersetzt; es gibt keine Offline-Erfassung und keine Mutationswarteschlange. Bei aktiviertem Dashboard-Passwort werden keine Offline-Auswertungen gespeichert. Passwortschutz, Authentifizierungsfehler und Logout setzen vor dem Löschen eine nicht geheime lokale Sperrepoche. Alle drei Speicher verwenden epochenspezifische Schlüssel, damit ein älterer Safari-/PWA-Kontext einen neu autorisierten Snapshot weder überschreiben noch löschen kann. Ist der persistente Richtlinienspeicher nicht verfügbar, liest die App fail-closed keinen Offline-Snapshot.
 

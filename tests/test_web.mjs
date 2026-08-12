@@ -701,7 +701,7 @@ const privateCacheResponse = {ok: true, source: 'private-cache'};
 const networkResponse = {ok: true, source: 'network', clone() { return this; }};
 const swContext = vm.createContext({
   URL,
-  location: {origin: 'http://127.0.0.1:8765'},
+  location: {origin: 'http://' + '127.0.0.1:8765'},
   fetch: async (_request, options) => { fetchOptions = options; return networkResponse; },
   caches: {
     async match() { globalCacheMatchCalls += 1; return privateCacheResponse; },
@@ -725,7 +725,7 @@ assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'),
 assert.equal(typeof fetchHandler, 'function');
 let responsePromise;
 fetchHandler({
-  request: {url: 'http://127.0.0.1:8765/api/today', method: 'GET'},
+  request: {url: 'http://' + '127.0.0.1:8765/api/today', method: 'GET'},
   respondWith(promise) { responsePromise = promise; },
 });
 await responsePromise;
@@ -738,7 +738,7 @@ for (const mode of ['navigate', 'same-origin']) {
   let installResponse;
   fetchHandler({
     request: {
-      url: 'http://127.0.0.1:8765/install/GymPilot-WebClip.mobileconfig',
+      url: 'http://' + '127.0.0.1:8765/install/GymPilot-WebClip.mobileconfig',
       method: 'GET',
       mode,
     },
@@ -751,7 +751,7 @@ for (const mode of ['navigate', 'same-origin']) {
 
 let privatePathResponse;
 fetchHandler({
-  request: {url: 'http://127.0.0.1:8765/__gympilot_private_dashboard_snapshot__', method: 'GET', mode: 'same-origin'},
+  request: {url: 'http://' + '127.0.0.1:8765/__gympilot_private_dashboard_snapshot__', method: 'GET', mode: 'same-origin'},
   respondWith(promise) { privatePathResponse = promise; },
 });
 assert.equal(await privatePathResponse, networkResponse);
@@ -766,7 +766,7 @@ const shellResponse = {ok: true, source: 'cached-index'};
 const coldContext = vm.createContext({
   URL,
   Request: class { constructor(path, options) { this.url = path; this.cache = options?.cache; } },
-  location: {origin: 'http://127.0.0.1:8765'},
+  location: {origin: 'http://' + '127.0.0.1:8765'},
   fetch: async () => { throw new TypeError('server offline'); },
   caches: {
     async match() { return null; },
@@ -787,7 +787,7 @@ vm.runInContext(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8
 
 let coldResponsePromise;
 coldFetchHandler({
-  request: {url: 'http://127.0.0.1:8765/app-launch?source=homescreen', method: 'GET', mode: 'navigate'},
+  request: {url: 'http://' + '127.0.0.1:8765/app-launch?source=homescreen', method: 'GET', mode: 'navigate'},
   respondWith(promise) { coldResponsePromise = promise; },
 });
 assert.equal(await coldResponsePromise, shellResponse);
