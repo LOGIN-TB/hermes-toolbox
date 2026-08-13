@@ -27,7 +27,7 @@ Die folgenden Skills wurden aus `coreyhaines31/marketingskills` abgeleitet:
 - Copyright laut Upstream-Lizenz: `Copyright (c) 2025 Corey Haines`
 - SHA-256 der am Commit geprüften Upstream-Lizenz: `b70d71e24e40fce5da8f4b6f9cd862096a048e433db7f3c8cac5e348e6d34591`
 
-Die hier veröffentlichten Fassungen ergänzen insbesondere Grenzen für Datenschutz, Einwilligung, Rechte, Fakten und Belege, externe Aktionen, Kosten, Veröffentlichung und operative Sicherheit. Das genaue Herkunfts-Repository und der fixierte Commit stehen zusätzlich im Frontmatter jedes Skills.
+Die hier veröffentlichten Fassungen ergänzen insbesondere eine vollständige deutsche Agentenführung, einen gekennzeichneten Deutschland-/DACH-Kontext und Grenzen für Datenschutz, Einwilligung, Rechte, Fakten und Belege, externe Aktionen, Kosten, Veröffentlichung und operative Sicherheit. Das genaue Herkunfts-Repository und der fixierte Commit stehen zusätzlich im Frontmatter jedes Skills. Die konkreten Übersetzungen, Umstrukturierungen, Korrekturen, DACH-Ergänzungen und bewusst nicht übernommenen Upstream-Empfehlungen sind pro Skill in [`docs/UPSTREAM-AENDERUNGEN.md`](docs/UPSTREAM-AENDERUNGEN.md) dokumentiert; das geschlossene maschinenlesbare Gegenstück liegt in [`skills/curation.json`](skills/curation.json). Diese Bearbeitungen sind keine offiziellen Ausgaben von `coreyhaines31/marketingskills`.
 
 ## LOGIN-TB: claude-skills
 

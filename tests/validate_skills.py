@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import hashlib
 import ipaddress
 import json
@@ -23,6 +24,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / "skills"
 CATALOG = SKILLS / "catalog.json"
+CURATION = SKILLS / "curation.json"
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 FRONTMATTER_RE = re.compile(r"\A---\n(?P<body>.*?)\n---(?:\n|\Z)", re.DOTALL)
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
@@ -54,21 +56,84 @@ LOGIN_COMMIT = "ff74380f1f17ba35bcc785bef74fa881a1c5f155"
 COREY_AUTHOR = "Corey Haines; Hermes-curated adaptation"
 EXPECTED_SKILLS = {
     "gym": ("application", "de", "LOGIN-TB/hermes-toolbox", None, "LOGIN-TB contributors"),
-    "ai-seo": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "seo-audit": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "product-marketing": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "social": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "cold-email": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "competitors": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "competitor-profiling": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "content-strategy": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "copywriting": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "customer-research": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "image": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "lead-magnets": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
-    "marketing-ideas": ("curated-document", "en", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "ai-seo": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "seo-audit": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "product-marketing": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "social": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "cold-email": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "competitors": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "competitor-profiling": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "content-strategy": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "copywriting": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "customer-research": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "image": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "lead-magnets": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
+    "marketing-ideas": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
     "vermenschlichen": ("curated-document", "de", "LOGIN-TB/claude-skills", LOGIN_COMMIT, "LOGIN-TB; Hermes-curated adaptation"),
 }
+GERMAN_CURATED_SKILLS = {
+    name for name, (kind, _language, origin, _commit, _author) in EXPECTED_SKILLS.items()
+    if kind == "curated-document" and origin == "coreyhaines31/marketingskills"
+}
+CURATION_KEYS = {"schema_version", "skills"}
+CURATION_ENTRY_KEYS = {
+    "name", "upstream_repository", "upstream_path", "upstream_commit", "local_version",
+    "content_language", "default_market", "change_categories", "change_summary",
+    "legal_review_domains", "last_reviewed",
+}
+REQUIRED_CHANGE_CATEGORIES = {
+    "übersetzt", "umstrukturiert", "DACH ergänzt", "Hermes angepasst", "Sicherheit ergänzt",
+}
+LOCAL_VERSION_RE = re.compile(r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-hermes\.2$")
+EXPECTED_HOMEPAGES = {
+    name: f"https://github.com/coreyhaines31/marketingskills/tree/{COREY_COMMIT}/skills/{name}"
+    for name in GERMAN_CURATED_SKILLS
+}
+REQUIRED_GERMAN_HEADINGS = {
+    "## Deutscher/DACH-Kontext", "## Ausgabeformat", "## Prüfliste",
+    "## Herkunft und Abweichungen",
+}
+FORBIDDEN_LEGAL_ASSURANCE_RE = re.compile(
+    r"(?i)\b(?:DSGVO[- ]konform|rechtssicher|in Deutschland erlaubt)\b"
+)
+FORBIDDEN_ENGLISH_STANDARD_HEADING_RE = re.compile(
+    r"^## (?:Overview|When to Use|Output(?: Format)?|Deliverable|Checklist|Scope|Workflow|Evidence|Common Pitfalls|Boundaries)\s*$",
+    re.MULTILINE,
+)
+
+
+class UniqueKeyLoader(yaml.SafeLoader):
+    """YAML loader that rejects duplicate mapping keys."""
+
+
+def construct_unique_mapping(loader: UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False) -> dict:
+    mapping: dict = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping", node.start_mark, f"found duplicate key {key!r}", key_node.start_mark
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct_unique_mapping
+)
+
+
+def reject_duplicate_json_key(pairs: list[tuple[str, object]]) -> dict:
+    result: dict = {}
+    for key, value in pairs:
+        if key in result:
+            fail(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def load_json_unique(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_json_key)
 
 
 def fail(message: str) -> NoReturn:
@@ -111,7 +176,7 @@ def validate() -> list[dict]:
     if unstaged.returncode != 0:
         fail("working-tree bytes differ from the staged tree")
 
-    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    catalog = load_json_unique(CATALOG)
     if not isinstance(catalog, dict) or set(catalog) != CATALOG_KEYS:
         fail("skills/catalog.json must contain exactly schema_version and skills")
     if catalog.get("schema_version") != 1:
@@ -139,6 +204,65 @@ def validate() -> list[dict]:
             fail(f"catalog entry {entry.get('name')} has an unsupported kind")
         if entry.get("language") not in ALLOWED_LANGUAGES:
             fail(f"catalog entry {entry.get('name')} has an unsupported language")
+
+    curation = load_json_unique(CURATION)
+    if not isinstance(curation, dict) or set(curation) != CURATION_KEYS:
+        fail("skills/curation.json must contain exactly schema_version and skills")
+    if curation.get("schema_version") != 1 or not isinstance(curation.get("skills"), list):
+        fail("skills/curation.json must use schema_version 1 and contain a skills list")
+    curation_entries = curation["skills"]
+    curation_names = [entry.get("name") for entry in curation_entries if isinstance(entry, dict)]
+    if len(curation_entries) != len(curation_names) or set(curation_names) != GERMAN_CURATED_SKILLS or len(curation_names) != len(set(curation_names)):
+        fail("skills/curation.json must contain every German curated skill exactly once")
+    catalog_by_name = {entry["name"]: entry for entry in entries}
+    curation_by_name = {}
+    seen_summaries: set[str] = set()
+    for entry in curation_entries:
+        name = entry.get("name")
+        if set(entry) != CURATION_ENTRY_KEYS:
+            fail(f"curation entry {name} has missing or unknown fields")
+        for field in CURATION_ENTRY_KEYS - {"change_categories", "legal_review_domains"}:
+            if not isinstance(entry.get(field), str) or not entry[field].strip():
+                fail(f"curation entry {name} has a non-string or empty field {field}")
+        for field in ("change_categories", "legal_review_domains"):
+            value = entry.get(field)
+            if (
+                not isinstance(value, list)
+                or not value
+                or len(value) != len(set(value))
+                or any(not isinstance(item, str) or not item.strip() for item in value)
+            ):
+                fail(f"curation entry {name} has an invalid {field}")
+        if set(entry["change_categories"]) != REQUIRED_CHANGE_CATEGORIES:
+            fail(f"curation entry {name} must use the canonical change categories")
+        summary = entry["change_summary"].strip()
+        if len(summary) < 40 or len(set(re.findall(r"\w+", summary.lower()))) < 8:
+            fail(f"curation entry {name} has an insufficient change summary")
+        normalized_summary = re.sub(r"\s+", " ", summary).casefold()
+        if normalized_summary in seen_summaries:
+            fail(f"curation entry {name} duplicates another change summary")
+        seen_summaries.add(normalized_summary)
+        if not LOCAL_VERSION_RE.fullmatch(entry["local_version"]):
+            fail(f"curation entry {name} has an invalid local version")
+        try:
+            reviewed = date.fromisoformat(entry["last_reviewed"])
+        except ValueError:
+            fail(f"curation entry {name} has an invalid ISO review date")
+        if reviewed > date.today():
+            fail(f"curation entry {name} has a future review date")
+        catalog_entry = catalog_by_name[name]
+        expected_path = f"skills/{name}/SKILL.md"
+        if (
+            entry["upstream_repository"] != catalog_entry["origin"]
+            or entry["upstream_path"] != expected_path
+            or entry["upstream_commit"] != catalog_entry["upstream_commit"]
+            or entry["content_language"] != "de"
+            or catalog_entry["language"] != "de"
+            or entry["default_market"] != "DE"
+            or not entry["local_version"].endswith("-hermes.2")
+        ):
+            fail(f"curation provenance, language, market, path, or version differs for {name}")
+        curation_by_name[name] = entry
 
     git_modes = subprocess.run(
         ["git", "ls-files", "-s"], cwd=ROOT,
@@ -207,7 +331,7 @@ def validate() -> list[dict]:
             fail(f"invalid YAML frontmatter delimiters in {skill_md.relative_to(ROOT)}")
         frontmatter = match.group("body")
         try:
-            metadata = yaml.safe_load(frontmatter)
+            metadata = yaml.load(frontmatter, Loader=UniqueKeyLoader)
         except yaml.YAMLError as exc:
             fail(f"invalid YAML frontmatter in {skill_md.relative_to(ROOT)}: {exc}")
         if not isinstance(metadata, dict):
@@ -230,6 +354,8 @@ def validate() -> list[dict]:
         seen_frontmatter_names.add(fm_name)
         if not description or not version or not author or license_name != "MIT":
             fail(f"invalid description/version/author/license in {name}")
+        if name in GERMAN_CURATED_SKILLS and re.match(r"(?i)^Nutzen\s*,\s*wenn\b", description):
+            fail(f"German curated skill {name} contains an unnatural trigger description")
         expected_kind, expected_language, expected_origin, expected_commit, expected_author = EXPECTED_SKILLS[name]
         if (
             entry["kind"] != expected_kind
@@ -248,9 +374,25 @@ def validate() -> list[dict]:
             commit = entry["upstream_commit"]
             if not re.fullmatch(r"[0-9a-f]{40}", commit):
                 fail(f"catalog entry {name} has no immutable upstream commit")
-            if commit not in text:
-                fail(f"SKILL.md for {name} does not document catalog upstream commit")
-            if not version.endswith("-hermes.1"):
+            hermes_metadata = metadata.get("metadata", {}).get("hermes", {}) if isinstance(metadata.get("metadata"), dict) else {}
+            if not isinstance(hermes_metadata, dict):
+                fail(f"frontmatter metadata.hermes must be a mapping in {name}")
+            if hermes_metadata.get("upstream_commit") != commit:
+                fail(f"frontmatter upstream commit differs from catalog for {name}")
+            if name in GERMAN_CURATED_SKILLS and hermes_metadata.get("homepage") != EXPECTED_HOMEPAGES[name]:
+                fail(f"frontmatter homepage differs from canonical upstream for {name}")
+            if name in GERMAN_CURATED_SKILLS:
+                curation_entry = curation_by_name[name]
+                if version != curation_entry["local_version"] or not version.endswith("-hermes.2"):
+                    fail(f"German curated skill {name} must use the documented -hermes.2 version")
+                missing_headings = REQUIRED_GERMAN_HEADINGS - {line.strip() for line in text.splitlines()}
+                if missing_headings:
+                    fail(f"German curated skill {name} lacks required headings: {sorted(missing_headings)}")
+                if FORBIDDEN_LEGAL_ASSURANCE_RE.search(text):
+                    fail(f"German curated skill {name} contains an unqualified legal assurance")
+                if FORBIDDEN_ENGLISH_STANDARD_HEADING_RE.search(text):
+                    fail(f"German curated skill {name} contains an English standard heading")
+            elif not version.endswith("-hermes.1"):
                 fail(f"curated skill {name} must use a -hermes.1 version")
             packaged_files = [
                 path.relative_to(skill_dir).as_posix()
@@ -295,9 +437,24 @@ def validate() -> list[dict]:
                     fail(f"unexpected binary file: {path.relative_to(ROOT)}")
 
     notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    changes = (ROOT / "docs/UPSTREAM-AENDERUNGEN.md").read_text(encoding="utf-8")
+    canonical_provenance = f"Gemeinsamer Upstream ist `coreyhaines31/marketingskills`, fixiert auf Commit `{COREY_COMMIT}`."
+    if canonical_provenance not in changes:
+        fail("docs/UPSTREAM-AENDERUNGEN.md lacks canonical repository and commit provenance")
     for entry in entries:
         if entry.get("kind") == "curated-document" and entry["upstream_commit"] not in notices:
             fail(f"THIRD_PARTY_NOTICES.md lacks the upstream commit for {entry['name']}")
+    for name in GERMAN_CURATED_SKILLS:
+        curation_entry = curation_by_name[name]
+        section = re.search(
+            rf"^## `{re.escape(name)}`\n(?P<body>.*?)(?=^## `|^## Pflegeprozess)",
+            changes, re.MULTILINE | re.DOTALL,
+        )
+        if not section:
+            fail(f"docs/UPSTREAM-AENDERUNGEN.md lacks a section for {name}")
+        body = section.group("body")
+        if curation_entry["local_version"] not in body or curation_entry["upstream_path"] not in body:
+            fail(f"documented local version or upstream path differs for {name}")
 
     expected_licenses = {
         "licenses/coreyhaines31-marketingskills-MIT.txt": "b70d71e24e40fce5da8f4b6f9cd862096a048e433db7f3c8cac5e348e6d34591",

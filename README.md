@@ -1,30 +1,37 @@
 # Hermes Toolbox
 
-Hermes Toolbox ist eine öffentliche Sammlung geprüfter und kuratierter Skills für [Hermes Agent](https://github.com/NousResearch/hermes-agent). Sie enthält dokumentbasierte Marketing-, Recherche-, Schreib- und Kreativ-Workflows sowie lokale Anwendungen wie GymPilot.
+Hermes Toolbox ist eine öffentliche Sammlung geprüfter und kuratierter Skills für [Hermes Agent](https://github.com/NousResearch/hermes-agent). Die Sammlung enthält eine einheitliche deutsche/DACH-Edition dokumentbasierter Marketing-, Recherche-, Schreib- und Kreativ-Workflows sowie lokale Anwendungen wie GymPilot.
 
-Die kuratierten Fassungen sind keine unveränderten Upstream-Kopien. Sie dokumentieren Ursprung und geprüften Commit und ergänzen konservative Grenzen für Fakten, Datenschutz, Einwilligung, Rechte, Kosten und externe Aktionen. Herkunft und Lizenzen stehen in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Die kuratierten Fassungen sind keine unveränderten Upstream-Kopien und keine offiziellen Ausgaben der ursprünglichen Projekte. Sie dokumentieren Ursprung und geprüften Commit, führen den Agenten auf Deutsch und ergänzen konservative Grenzen für Fakten, Datenschutz, Einwilligung, Rechte, Kosten und externe Aktionen. Deutschland ist bei einem deutschen Auftrag ohne anderen Zielmarkt eine gekennzeichnete Arbeitsannahme; Österreich und die Schweiz werden separat behandelt.
+
+- [Kuratierungsrichtlinie](docs/KURATIERUNGSRICHTLINIE.md)
+- [Konkrete Änderungen gegenüber Upstream](docs/UPSTREAM-AENDERUNGEN.md)
+- [Terminologie und Schreibstandard](docs/TERMINOLOGIE.md)
+- [Autoritative Quellen und Prüfeinstiege](docs/QUELLENREGISTER.md)
+- [Herkunft und Lizenzen](THIRD_PARTY_NOTICES.md)
+- Maschinenlesbare Manifeste: [`skills/catalog.json`](skills/catalog.json) und [`skills/curation.json`](skills/curation.json)
 
 ## Skill-Katalog
 
 | Skill | Aufgabe | Sprache | Ausführbarer Code |
 |---|---|---:|---:|
-| [`ai-seo`](skills/ai-seo/SKILL.md) | Sichtbarkeit in KI-Suchsystemen prüfen und verbessern | EN | nein |
-| [`seo-audit`](skills/seo-audit/SKILL.md) | technische und inhaltliche SEO-Prüfung | EN | nein |
-| [`product-marketing`](skills/product-marketing/SKILL.md) | belegte Produktmarketing-Grundlage pflegen | EN | nein |
-| [`social`](skills/social/SKILL.md) | Social-Media-Inhalte und Planung | EN | nein |
-| [`cold-email`](skills/cold-email/SKILL.md) | kontrollierte B2B-Outreach-Entwürfe | EN | nein |
-| [`competitors`](skills/competitors/SKILL.md) | sachliche Wettbewerbs- und Vergleichsinhalte | EN | nein |
-| [`competitor-profiling`](skills/competitor-profiling/SKILL.md) | quellengebundene Wettbewerberprofile | EN | nein |
-| [`content-strategy`](skills/content-strategy/SKILL.md) | evidenzbasierte Content-Strategien | EN | nein |
-| [`copywriting`](skills/copywriting/SKILL.md) | sachliche, belegte Website-Texte | EN | nein |
-| [`customer-research`](skills/customer-research/SKILL.md) | datensparsame Kundenforschung | EN | nein |
-| [`image`](skills/image/SKILL.md) | sichere Planung und Bearbeitung von Bildern | EN | nein |
-| [`lead-magnets`](skills/lead-magnets/SKILL.md) | datenschutzbewusste Lead-Magnet-Konzepte | EN | nein |
-| [`marketing-ideas`](skills/marketing-ideas/SKILL.md) | Marketinghypothesen und kontrollierte Experimente | EN | nein |
+| [`ai-seo`](skills/ai-seo/SKILL.md) | Sichtbarkeit in KI-Suchsystemen prüfen und verbessern | DE | nein |
+| [`seo-audit`](skills/seo-audit/SKILL.md) | technische und inhaltliche SEO-Prüfung | DE | nein |
+| [`product-marketing`](skills/product-marketing/SKILL.md) | belegte Produktmarketing-Grundlage pflegen | DE | nein |
+| [`social`](skills/social/SKILL.md) | Social-Media-Inhalte und Planung | DE | nein |
+| [`cold-email`](skills/cold-email/SKILL.md) | kontrollierte B2B-Outreach-Entwürfe | DE | nein |
+| [`competitors`](skills/competitors/SKILL.md) | sachliche Wettbewerbs- und Vergleichsinhalte | DE | nein |
+| [`competitor-profiling`](skills/competitor-profiling/SKILL.md) | quellengebundene Wettbewerberprofile | DE | nein |
+| [`content-strategy`](skills/content-strategy/SKILL.md) | evidenzbasierte Content-Strategien | DE | nein |
+| [`copywriting`](skills/copywriting/SKILL.md) | sachliche, belegte Website-Texte | DE | nein |
+| [`customer-research`](skills/customer-research/SKILL.md) | datensparsame Kundenforschung | DE | nein |
+| [`image`](skills/image/SKILL.md) | sichere Planung und Bearbeitung von Bildern | DE | nein |
+| [`lead-magnets`](skills/lead-magnets/SKILL.md) | datenschutzbewusste Lead-Magnet-Konzepte | DE | nein |
+| [`marketing-ideas`](skills/marketing-ideas/SKILL.md) | Marketinghypothesen und kontrollierte Experimente | DE | nein |
 | [`vermenschlichen`](skills/vermenschlichen/SKILL.md) | natürliche deutsche Textredaktion | DE | nein |
 | [`gym`](skills/gym/SKILL.md) | lokaler Trainingstracker GymPilot | DE | ja |
 
-Die maschinenlesbare Liste liegt unter [`skills/catalog.json`](skills/catalog.json).
+Die Angabe `DE` beschreibt die Sprache der Agentenanweisung. Die Skills antworten grundsätzlich in der Sprache des Nutzers; bei einem deutschen Auftrag verwenden sie natürliches Standarddeutsch und beachten Anrede, Zielmedium und Markenstimme.
 
 ## Installation
 

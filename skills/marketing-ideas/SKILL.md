@@ -1,249 +1,154 @@
 ---
 name: marketing-ideas
-description: "Use when generating evidence-aware marketing experiments."
-version: 2.0.0-hermes.1
+description: "Nutze diesen Skill, wenn kontextspezifische, evidenzbewusste Marketinghypothesen entwickelt, sicher vorgeprüft und als messbare Experimente priorisiert werden sollen."
+version: 2.0.0-hermes.2
 author: Corey Haines; Hermes-curated adaptation
 license: MIT
 metadata:
   hermes:
     tags: [marketing-ideas, ideation, growth, experiments, prioritization]
-    homepage: https://github.com/coreyhaines31/marketingskills/tree/main/skills/marketing-ideas
+    homepage: https://github.com/coreyhaines31/marketingskills/tree/7868cb9251fad80a73d26e488a5ad5f6c4a9f335/skills/marketing-ideas
     upstream_commit: 7868cb9251fad80a73d26e488a5ad5f6c4a9f335
     related_skills: [product-marketing, content-strategy, customer-research, b2b-ai-offer-strategy]
 ---
 
-# Marketing ideas
+# Marketingideen und Experimente
 
-Generate and prioritize context-specific marketing hypotheses, not a list of universally “proven” tactics. This is a locally curated Hermes adaptation of Corey Haines' MIT-licensed `marketing-ideas` skill at the pinned upstream commit.
+Erzeuge und priorisiere kontextspezifische Marketinghypothesen statt einer Liste angeblich allgemein bewährter Taktiken. Standard ist eine Auswahlliste mit Testskizze im Chat. Ideenfindung erlaubt Analyse, aber keine Umsetzung.
 
-Default to a shortlist and test brief in chat. Brainstorming authorizes analysis only. It does not authorize research into private systems, contact collection, outreach, posting, account actions, ad creation, budget spend, tracking, data sharing, purchasing, publishing, product changes, discounts, giveaways, partnerships, or contracts.
+## Sicherheits- und Evidenzregeln
 
-## Safety and evidence rules
+1. **Begrenzte Quellen.** Nutze nur gelieferte Informationen und freigegebene Projektdateien. CRM, Analytics, E-Mail, Support, Kontaktlisten, Browserprofile, Communities und Zugangsdaten nicht ohne konkrete Freigabe verwenden.
+2. **Ideen sind Hypothesen.** „Bewährt“, „Quick Win“, „günstig“, „beste“ oder „hohe Absicht“ nur mit vergleichbarer Evidenz. Trenne Beobachtung, interne Aussage, Drittschätzung, Hypothese und Unbekanntes.
+3. **Keine Ausführung durch Andeutung.** Keine Recherche, Kontaktsammlung, Nachricht, Veröffentlichung, Kontoaktion, Anzeige, Ausgabe, Installation, Produkt-/Websiteänderung, Rabattaktion, Partnerschaft oder Vertrag ohne ausdrückliche Freigabe.
+4. **Keine erfundenen Nachweise.** Keine Nachfrage, Conversion, Rendite, Rankings, Kundengeschichten, Empfehlungen, Dringlichkeit oder Wettbewerberschwächen erfinden.
+5. **Datenschutz und Einwilligung.** Keine versteckte Verfolgung, Fingerprinting, Datenbroker-Anreicherung, Kontakt-Scraping, unerlaubte Profilbildung, private Community-Auswertung oder Audience-/Pixel-Weitergabe empfehlen.
+6. **Plattformintegrität.** Keine Fake-Bewertungen, Review-Gating, Engagement-Pods, gekauften Follower, Cloaking, Identitätsverwechslung, Regelumgehung oder verdeckte Automatisierung.
+7. **Suchintegrität.** Keine Doorway-Seiten, parasitäre Reputationsnutzung, Linkmanipulation, kopierte Vergleiche oder massenhafte dünne Inhalte.
+8. **Faire Vergleiche.** Aktuelle Quellen, neutrale Abwägungen und Marken-/Rechtsprüfung; keine Verleumdung, Nachahmung oder vertrauliche Wettbewerbsdaten.
+9. **Kommunikation.** E-Mail, DM, Presse-, Podcast-, Influencer- oder Partneransprache braucht legitime Zielauswahl, Identität, Einwilligungs-/Rechtsprüfung, Sperrlisten, einfachen Widerspruch und separate Sendefreigabe. Kein massenhafter unaufgeforderter Versand.
+10. **Partnerschaften und Vorteile.** Affiliate-, Referral-, Sponsoring-, Influencer-, Zertifizierungs- und Integrationsprogramme benötigen Bedingungen, Offenlegung, Markenrechte, Datenrollen, Betrugsschutz, Steuer-/Buchhaltungsprüfung und Einwilligungsgrenzen.
+11. **Aktionen und Knappheit.** Gewinnspiele, Rabatte, Testphasen, Early Access und Giveaways benötigen echte Bedingungen, Eignung, Regionen, Steuer-, Plattform-, Datenschutz-, Verbraucher- und Budgetprüfung. Keine erfundene Knappheit.
+12. **Rechte.** Quellen und Nutzungsrechte für Zitate, Bilder, Logos, Musik, Daten, Vorlagen, Open Source, Kundenstories und Forschung prüfen.
+13. **Produktideen sind Produktprojekte.** Tools, Erweiterungen, APIs, OAuth, Importe, Viral Loops und Open-Source-Komponenten benötigen Spezifikation, Security/Privacy, Barrierefreiheit, Missbrauchsschutz, Wartung, Support, Tests und Rollback.
+14. **Sensible Bereiche.** Gesundheit, Finanzen, Recht, Arbeit, Wohnen, Bildung, Versicherung, Minderjährige, Politik und vulnerable Gruppen erfordern Fachprüfung; keine sensiblen Merkmale für diskriminierende Auswahl oder Preise.
+15. **Physische und Reputationsrisiken.** Events, Stunts, Außenwerbung und kontroverse Kampagnen benötigen Rechte, Genehmigungen, Sicherheit, Barrierefreiheit, Einwilligung Unbeteiligter, Versicherung und Krisenplan.
 
-1. **Project-local scope.** Use only explicitly supplied information and relevant files inside an identified project. Do not inspect unrelated folders, cloud drives, CRM, analytics, email, support, contact lists, browser profiles, credentials, `.env`, or private conversations without authorization for the named source and purpose.
-2. **Ideas are hypotheses.** Do not label a tactic “proven,” “quick win,” “high intent,” “low cost,” or “best” without comparable evidence. Separate `Observed evidence`, `Internal claim`, `Third-party estimate`, `Hypothesis`, and `Unknown`.
-3. **No automatic external research.** A request for ideas does not authorize competitor crawling, social listening, keyword research, customer-data mining, paid APIs, or private-community access. Propose a bounded research scope first when evidence is needed.
-4. **No execution by implication.** Recommending a channel or experiment does not authorize implementation. Obtain explicit approval before contacting anyone, creating accounts, installing software, changing a product/site, submitting listings, launching ads, spending money, publishing, sending, scheduling, or entering an agreement.
-5. **Claims and attribution.** Never invent audience demand, traffic, rankings, conversion, ROI, customer stories, reviews, awards, endorsements, scarcity, urgency, product results, competitor weaknesses, or market prevalence. Define metrics and attribution limits.
-6. **Privacy and consent.** Do not recommend hidden tracking, fingerprinting, data-broker enrichment, cross-site identity stitching, unauthorized customer-data use, private-community mining, contact scraping, or audience sharing. Tracking, personalization, email, CRM, referral, webinar, and lead-capture ideas need dedicated privacy and consent design.
-7. **No audience or pixel sharing by default.** Do not share remarketing pixels, hashed lists, lookalike seeds, CRM audiences, event data, or conversion data with partners/platforms without documented roles, notice/consent analysis, contracts, minimization, security, retention, and approval.
-8. **Platform integrity.** Exclude engagement pods, fake reviews, review gating, coordinated inauthentic behavior, required social engagement that violates platform rules, deceptive account use, cloaking, purchased followers, undisclosed automation, and bypassing moderation or rate limits.
-9. **Search integrity.** Avoid parasite/reputation abuse, doorway or thin programmatic pages, copied comparison pages, fabricated glossaries, mass low-value content, manipulative link schemes, or claims that a domain/platform will “rank faster.” Search ideas must provide distinct user value and follow current platform policies.
-10. **Competitor fairness.** Comparisons and competitor-keyword campaigns require current evidence, neutral trade-offs, trademark/legal review where applicable, and no confusion about affiliation. Do not exploit confidential data, misrepresent weaknesses, impersonate, intercept accounts, or make defamatory claims.
-11. **Outreach and communications.** Cold email, journalist pitches, podcast tours, influencer outreach, customer reactivation, newsletters, DMs, and partner swaps require legitimate targeting, consent/legal assessment, accurate identity, suppression handling, easy opt-out, and separate approval before sending. No mass unsolicited outreach.
-12. **Partnerships and endorsements.** Affiliate, reseller, influencer, expert, referral, sponsorship, whitelisting, newsletter swap, certification, and integration programs need documented terms, disclosure, brand permissions, conflicts, data roles, fraud controls, tax/accounting review, and consent boundaries.
-13. **Influencer whitelisting is sensitive.** Running ads from another person's account requires explicit written authorization, scoped access, approval rights, disclosure, account-security controls, end date, and verification. Never request passwords or take over accounts.
-14. **Promotions and giveaways.** Contests, sweepstakes, referral rewards, grants, discounts, free trials, lifetime deals, early-access pricing, and giveaways require official rules, eligibility, geography, prize/odds disclosures, taxes, platform policy, privacy, consumer-law review, fulfillment, fraud controls, and budget approval. Do not require unlawful or prohibited engagement.
-15. **No fabricated urgency.** Seasonal campaigns, launch windows, early access, limited inventory, price changes, and scarcity must be real, material, disclosed, and honored. Avoid fake countdowns, surprise renewal, hidden conditions, or pressure based on manufactured fear.
-16. **Rights and provenance.** Verify permissions and licenses for customer language, quotes, screenshots, product data, original research, user stories, reviews, logos, images, music, documentaries, books, courses, playlists, templates, open-source releases, datasets, and third-party examples.
-17. **Product and security ideas need engineering review.** Importers, scanners, extensions, APIs, OAuth, migrations, viral loops, powered-by badges, onboarding/offboarding, free tools, public demos, and open-source components require threat modeling, privacy, accessibility, abuse prevention, maintenance, terms, support, and truthful product behavior.
-18. **Sensitive domains and groups.** Health, finance, legal, employment, housing, education, insurance, minors, politics, and vulnerable audiences require specialist review. Do not use protected or inferred sensitive traits for discriminatory targeting, exclusion, pricing, persuasion, or eligibility.
-19. **Reputation and physical-world safety.** Controversy, humor, stunts, guerrilla activity, OOH, live events, challenges, documentaries, and reality-style customer content require brand, safety, property/permit, bystander consent, accessibility, crisis, insurance, and legal review. Do not provoke harm, trespass, deceive the public, or manufacture outrage.
-20. **No automatic persistence.** Show recommendations, evidence ledger, scoring, or proposed experiment brief before writing files or changing external systems.
+## Kontextbrief
 
-## Context brief
+Erfrage nur shortlist-relevante Angaben:
 
-Infer low-risk details when clear; otherwise ask only what changes the shortlist:
+- Produkt, Land, Sprache, Markt und Geschäftsmodell;
+- Zielorganisationen, Buying Group, Job, Auslöser und Ausschlüsse;
+- Phase, Ziel, Zeithorizont und belastbarer Ausgangswert;
+- freigegebene Aussagen und Nachweise;
+- bestehende Kanäle, eigene Reichweite und Distributionsvorteile;
+- frühere Tests, Methodik, Resultate und Learnings;
+- Team, Fähigkeiten, Budgetobergrenze, Prüf- und Wartungskapazität;
+- Vertriebszyklus, Wert, Marge und Umsetzungs-/Supportlast;
+- Datenschutz-, Sicherheits-, Rechts-, Marken- und Barrierefreiheitsgrenzen;
+- Risikobereitschaft und ausdrücklich ausgeschlossene Handlungen.
 
-- product/service, geography, language, market, and business model;
-- target organizations, buying group, user job, trigger, and exclusions;
-- current stage, objective, decision horizon, and actual baseline;
-- approved product claims and proof;
-- current channels, owned audience, distribution advantages, and constraints;
-- prior experiments, results, methodology, and learnings;
-- team capacity, skills, budget ceiling, review time, and maintenance capacity;
-- sales cycle, average value, margin, implementation/support burden;
-- regulatory, privacy, security, accessibility, brand, and legal constraints;
-- risk appetite and actions that are explicitly off-limits.
+Ein freigegebener `.agents/product-marketing.md` kann projektlokal dienen. Keine privaten Systeme automatisch lesen.
 
-Use an approved project-local `.agents/product-marketing.md` under the `product-marketing` safeguards when available. Do not auto-read private systems.
+## Ideenfindungsablauf
 
-## Ideation workflow
+### 1. Problem als Entscheidung formulieren
 
-### 1. Define the problem
+„Wachsen“, „Leads gewinnen“ oder „Autorität aufbauen“ übersetzen in Zielgruppe und Verhalten, Funnel-/Kundenphase, Ausgangswert/Quelle, Ergebnis/Zeitraum, praktische Grenze, Früh-/Spätkennzahl, Schutzkennzahlen und Folgeentscheidung. Schnelle Akquise ist nicht automatisch Paid oder Outbound; Geschwindigkeit hängt von Zugang, Angebot, Vertriebszyklus, Nachweis, Kreativmaterial, Messung, Budget und Kapazität ab.
 
-Convert “grow,” “get leads,” or “build authority” into a measurable decision:
+### 2. Evidenzverzeichnis aufbauen
 
-- target audience and behavior;
-- funnel or customer stage;
-- baseline and source;
-- desired outcome and period;
-- practical constraint;
-- leading metric, lagging metric, and guardrails;
-- what decision follows the experiment.
-
-Fast acquisition is not synonymous with paid ads or outbound. Channel speed depends on audience access, offer readiness, sales cycle, proof, creative, instrumentation, budget, and operational capacity.
-
-### 2. Build an evidence ledger
-
-| ID | Signal/claim | Class | Source/date | Relevance | Confidence | Unknowns |
+| ID | Signal/Aussage | Klasse | Quelle/Datum | Relevanz | Konfidenz | Unbekanntes |
 |---|---|---|---|---|---|---|
-| E-01 | | Observed / Internal / Estimate / Hypothesis / Unknown | | | High/Medium/Low | |
+| E-01 | | Beobachtung / Intern / Schätzung / Hypothese / Unbekannt | | | Hoch/Mittel/Niedrig | |
 
-A tactic used by a competitor is evidence of activity, not performance or suitability. Public ad duration, engagement, backlinks, rankings, and visibility do not establish profit, incrementality, legal compliance, or strategic fit.
+Eine Wettbewerbstaktik belegt Aktivität, nicht Leistung, Profitabilität, Inkrementalität, Rechtskonformität oder Passung.
 
-### 3. Generate across mechanisms
+### 3. Über Mechanismen hinweg entwickeln
 
-Create a diverse candidate pool, such as:
+Kandidaten aus Produktnutzen/Kundenerfolg, Bildung/Entscheidungshilfe, Suche mit eigenständigem Wert, Experten-/Gründerdistribution, erlaubter Kundenempfehlung, Partnerschaften, respektvoller Community-Teilnahme, Veranstaltungen/Demos, kontrollierten Empfehlungsprogrammen, bezahlten Medien, echter PR, einwilligungsbasierter Bestandskundenkommunikation und nur bei Betriebsreife Lokalisierung erzeugen.
 
-- product utility and customer success;
-- educational and decision-support content;
-- search/discovery with unique value;
-- founder/expert distribution;
-- customer advocacy with permission;
-- partnerships with clear mutual value;
-- community participation without extraction;
-- events and demonstrations;
-- referrals and product loops with user control;
-- paid demand capture or creation;
-- PR based on genuinely newsworthy evidence;
-- lifecycle communication to appropriately permissioned recipients;
-- localization only where operational readiness exists.
+### 4. Vor Bewertung aussortieren
 
-Do not present the upstream catalog's numbering or categories as evidence of quality.
+Ablehnen oder eskalieren bei unklarer Datennutzung, Manipulation, irreführender Nutzerführung, unbelegten Aussagen, falscher Empfehlung, unerlaubten Rechten, Konten oder Kundendaten, Massenansprache, nicht vorhandenen Funktionen, versteckten Folgekosten, Diskriminierung sowie unvertretbarem physischem, rechtlichem, Sicherheits- oder Reputationsrisiko.
 
-### 4. Screen before scoring
+### 5. Transparent bewerten
 
-Reject or escalate ideas that depend on:
+Situativ Kriterien und Gewichte vereinbaren: Zielgruppenevidenz, Ziel-/Phasenpassung, Angebotsreife, Distributionszugang, Lernwert, Nachweis-/Kreativreife, Zeit bis Signal, Aufwand/Wartung, Budgetrisiko, Datenschutz/Recht/Plattform/Security/Barrierefreiheit/Reputation, Messbarkeit, Umkehrbarkeit und Konfidenz. Annahmen und Sensitivität zeigen; fehlende Daten senken Konfidenz.
 
-- unlawful or unclear data use;
-- platform manipulation or deceptive UX;
-- unverified claims or false endorsement;
-- unauthorized IP, likeness, account, or customer use;
-- mass unsolicited contact;
-- unavailable product capabilities;
-- hidden recurring costs or material operational load;
-- discrimination or exploitation of vulnerability;
-- physical, reputational, legal, or security risk beyond the stated appetite.
+### 6. Portfolio empfehlen
 
-### 5. Score transparently
+Drei bis fünf Ideen nur, wenn dies die Entscheidung erleichtert: gegebenenfalls ein günstiger Lerntest, ein wiederverwendbares Asset, ein Distributions-/Beziehungstest und optional ein klar markierter höherer Einsatz. Bei gewünschter Langliste nach Mechanismus gruppieren und Voraussetzungen sowie geringe Konfidenz sichtbar machen.
 
-Agree criteria and weights rather than using a universal formula. Candidate criteria:
+## Experimentsteckbrief
 
-- strength of audience evidence;
-- fit to objective and buying stage;
-- offer/product readiness;
-- access to distribution;
-- expected learning value;
-- proof and creative readiness;
-- time to observable signal;
-- implementation and maintenance effort;
-- cash exposure and downside cap;
-- privacy, legal, platform, security, accessibility, and reputation risk;
-- measurement feasibility;
-- reversibility;
-- confidence.
+Für jede engere Idee:
 
-Show assumptions and sensitivity. Missing data lowers confidence; do not fill it with plausible numbers.
+1. **Idee und Mechanismus:** erwartetes Verhalten und Begründung.
+2. **Passung:** Zielgruppe, Phase, Ziel und Evidenz.
+3. **Hypothese:** widerlegbare Aussage statt Versprechen.
+4. **Minimaltest:** kleinste ethische Umsetzung, die die Frage beantwortet.
+5. **Mittel:** Verantwortung, Kompetenzen, Zeitspanne, Budgetdeckel, Abhängigkeiten, Werkzeuge.
+6. **Benötigte Evidenz:** Fakten, Rechte, Kreativmaterial, Produktreife.
+7. **Risiken/Prüftore:** Datenschutz, Recht, Plattform, Rechte, Security, Barrierefreiheit, Reputation.
+8. **Messung:** Zähler, Nenner, Kohorte, Quelle, Zeitraum, Qualitäts- und Schadensgrenzen.
+9. **Entscheidungsregel:** fortsetzen, ändern, stoppen oder untersuchen.
+10. **Freigabegrenze:** genaue externe Aktion, die noch nicht autorisiert ist.
 
-### 6. Recommend a portfolio
+Spannen nur bei Grundlage verwenden. Erwartetes Ergebnis als beobachtbares Signal, nie als garantierten Geschäftserfolg beschreiben.
 
-Default to three to five ideas only when that helps decision-making. Include a balance where appropriate:
+## Kanalspezifische Leitplanken
 
-- one low-cost learning test;
-- one reusable/compounding asset;
-- one distribution or relationship experiment;
-- optionally one higher-risk/higher-investment test clearly labeled.
+- **Content/Suche/Social/Community:** eigenständiger Wert, Quellen, Moderationsnormen, Rechte, Barrierefreiheit und Privatsphäre; keine privaten Gruppen auslesen oder automatisch posten.
+- **Bezahlte Werbung/Retargeting:** aktuelle Plattformregeln, Zielgruppenbeschränkung, Einwilligung, Aussagen, Landingpage, Budget, Abrechnung, Attribution, Kontakthäufigkeit und Abbruchkriterien vor Start prüfen.
+- **E-Mail/Lifecycle:** Zweck und Empfänger passend; Transaktion und Marketing trennen; Abmeldung, Sperrung und Einwilligungswiderruf respektieren.
+- **Referral/Affiliate/Promotion:** Nutzen, Anreiz, Offenlegung, Missbrauchsschutz, Bedingungen, Steuern, Eignung, Obergrenzen und Support planen.
+- **Daten/Reports:** autorisiert, minimiert und hinreichend aggregiert; Stichprobe, Methode, Unsicherheit, Zweck, Aufbewahrung und Re-Identifikationsrisiko dokumentieren.
+- **Produkt/Developer:** Spezifikation, Berechtigungen, Testumgebung, Rollback, Monitoring, Support und echte QA.
+- **Events/PR:** Einwilligung, Aufnahme-/Ortsrechte, Genehmigung, Barrierefreiheit, Offenlegung, Moderation und Krisenplan.
 
-A long list is acceptable when explicitly requested, but group it and mark low-confidence or prerequisite-heavy ideas rather than presenting everything as equally suitable.
+## Messprinzipien
 
-## Experiment brief
+Kennzahlen vor Zielsetzung definieren. Qualität, Kosten, Beschwerden, Abmeldungen, Supportlast, Barrierefreiheitsfehler, Betrug und negatives Feedback als Schutzkennzahlen einbeziehen. Korrelation von Inkrementalität und Beitrag von Attribution unterscheiden. Impressionen, Klicks, Follower, Registrierungen, Rankings oder Erwähnungen allein sind kein Erfolg. Wenn möglich Vergleichsbasis, Holdout, Geo-Split oder belastbares Zeitreihendesign nutzen. Bei schlechter Datenqualität, fehlender Rechtsgrundlage, Überlastung oder Nutzerschaden stoppen.
 
-For each shortlisted idea provide:
+## Deutscher/DACH-Kontext
 
-1. **Idea and mechanism** — what behavior is expected and why.
-2. **Fit** — audience, stage, objective, and relevant evidence.
-3. **Hypothesis** — falsifiable statement, not a promised outcome.
-4. **Minimum test** — smallest ethical implementation that can answer the question.
-5. **Inputs** — owner, skills, time range, budget cap, dependencies, and tools.
-6. **Evidence/claims needed** — facts, permissions, creative, product readiness.
-7. **Risks and review gates** — privacy, legal, rights, platform, security, accessibility, reputation.
-8. **Measurement** — numerator, denominator, cohort, source, period, quality and harm guardrails.
-9. **Decision rule** — continue, revise, stop, or investigate.
-10. **Approval boundary** — exact external action not yet authorized.
+Bei deutschsprachigem Auftrag ist **Deutschland die gekennzeichnete Standardannahme**. Österreich und Schweiz separat bewerten; Zulässigkeit, Kanäle, Erwartungen, Sprache, Steuern und Kosten nicht pauschal übertragen.
 
-Use ranges only when grounded. Expected outcome should describe an observable signal, not a guaranteed business result.
+- Nutzer-/Zielsprache und `Sie`/`Du` je Publikum und Kanal konsistent festlegen.
+- Budget und Preise in passender Währung; EUR sowie Netto/Brutto/Umsatzsteuer sachgerecht kennzeichnen, CH getrennt behandeln.
+- Datums- und Fristangaben eindeutig lokalisieren; technische ISO-Daten beibehalten.
+- UWG, DSGVO und TDDDG, Einwilligung, Direktmarketing, Gewinnspiele, Preisangaben, Plattformregeln, Markenrecht und Barrierefreiheit als aktuelle Prüffelder markieren.
+- Keine Rechtsberatung oder Rechtsgarantie geben; vor Umsetzung zuständige Fachprüfung vorsehen.
+- DACH-Lokalisierung ist eine Hypothese, solange lokale Zielgruppen- und Kanalevidenz fehlt.
 
-## Channel safeguards
+## Ausgabeformat
 
-### Content, search, social, and community
+### Auswahlliste
 
-Use `content-strategy`, `seo-audit`, `ai-seo`, `social`, and community workflows. Preserve unique value, source provenance, moderation norms, accessibility, disclosure, and customer privacy. Do not scrape private groups, post automatically, or copy competitors.
-
-### Paid media and retargeting
-
-Verify current platform policies, targeting restrictions, consent/data requirements, creative claims, landing-page truth, budget, billing, attribution, brand safety, exclusions, frequency, and stop-loss before launch. Do not optimize using sensitive traits or upload customer audiences without approval.
-
-### Email and lifecycle
-
-Use only appropriate recipients and purposes. Separate operational messages from marketing. Honor unsubscribe, suppression, deletion, and consent withdrawal. Do not treat churned, expired-trial, or inactive users as automatically contactable.
-
-### Referrals, affiliates, and promotions
-
-Design user benefit, incentives, abuse controls, disclosure, attribution, terms, tax/accounting treatment, eligibility, caps, and support. Do not create coerced invitations, spam loops, pyramid-like structures, or undisclosed endorsements.
-
-### Research, reports, and personalized wraps
-
-Use authorized, minimized, sufficiently aggregated data. Document sample, methodology, exclusions, uncertainty, re-identification risk, consent/purpose, retention, rights, and review. Personalized summaries require secure access and must not expose private behavior or manipulate sharing.
-
-### Product-led and developer ideas
-
-Treat these as software/product projects, not simple marketing switches. Require specs, consent and permissions, security review, test environments, rollback, support, monitoring, deprecation, and real QA before release.
-
-### Events, PR, and unconventional activity
-
-Obtain speaker/participant consent, recording permissions, venue/platform rights, insurance/permit review, accessibility, disclosures, crisis plan, moderation, and truthful media relations. Never fabricate newsworthiness or customer participation.
-
-## Measurement principles
-
-- Define metric semantics before setting targets.
-- Include quality, cost, privacy complaints, unsubscribes, support burden, accessibility failures, fraud, brand safety, and negative feedback as guardrails.
-- Distinguish correlation from incrementality and contribution from attribution.
-- Do not declare success from impressions, clicks, followers, signups, rankings, or mentions alone.
-- Use a comparable baseline, holdout, geo split, time series, or another defensible design when feasible.
-- Account for novelty effects, seasonality, channel overlap, sales lag, and selection bias.
-- Stop or reassess when data quality, legal basis, delivery capacity, or user harm is unacceptable.
-
-## Output format
-
-### Shortlist
-
-| Rank | Idea | Mechanism | Evidence | Minimum test | Time/cost range | Main risk | Metric/guardrails | Confidence |
+| Rang | Idee | Mechanismus | Evidenz | Minimaltest | Zeit-/Kostenrahmen | Hauptrisiko | Kennzahl/Schutzgrenze | Konfidenz |
 |---:|---|---|---|---|---|---|---|---|
 
-Then provide an experiment brief for the top candidate and list the approvals needed before execution.
+Danach für den Spitzenkandidaten den Experimentsteckbrief und alle nötigen Freigaben liefern. Bei großer Ideensammlung nach Mechanismus gruppieren und je Idee Konzept, Passung, Voraussetzung, Evidenzklasse, Aufwand, Budgetrisiko, Prüfung und nächsten Validierungsschritt zeigen. Keine Scheinpräzision.
 
-### Large idea set
+## Prüfliste
 
-When the user explicitly requests many ideas, group by mechanism and show for each:
+- [ ] Ziel, Zielgruppe, Ausgangswert, Grenze und Folgeentscheidung sind klar.
+- [ ] Beobachtung, Schätzung, Hypothese und Unbekanntes sind getrennt.
+- [ ] Ideen wurden vor dem Scoring sicherheitlich geprüft.
+- [ ] Keine Idee beruht auf Tracking, Spam, Manipulation, falschem Nachweis oder unerlaubten Daten/Rechten.
+- [ ] Kosten umfassen Umsetzung, Medienbudget, Werkzeuge, Arbeit, Support, Wartung und Compliance.
+- [ ] Aussagen, Rechte, Plattform, Datenschutz, Sicherheit, Barrierefreiheit und Reputation sind sichtbar.
+- [ ] Messung enthält Qualitäts- und Schadensgrenzen.
+- [ ] Experiment hat Verantwortung, Budgetdeckel, Stopregel und Freigabegrenze.
+- [ ] Deutschland/AT/CH, Sprache, Anrede, Währung, Steuer und Datum sind geklärt.
+- [ ] Keine Rechtsgarantie und keine externe Aktion ohne Freigabe.
 
-- one-line concept;
-- fit and prerequisite;
-- evidence class/confidence;
-- indicative effort and cash exposure;
-- key risk/review;
-- next validation step.
+## Abgrenzung
 
-Do not add fake precision merely to fill the table.
+`product-marketing` liefert Positionierung und Nachweise, Kundenforschung validiert Bedürfnisse, `content-strategy` plant Content-Portfolios und Angebotsstrategie strukturiert Leistungen. Kanal-, Rechts-, Produkt-, Forschungs- und Betriebsworkflows regeln die Umsetzung. Dieser Skill entwickelt Hypothesen und setzt sie nicht stillschweigend um.
 
-## Review checklist
+## Herkunft und Abweichungen
 
-- [ ] Objective, audience, baseline, constraint, and decision are explicit.
-- [ ] Evidence, estimates, hypotheses, and unknowns are separate.
-- [ ] Ideas were screened before scoring.
-- [ ] No idea depends on hidden tracking, spam, manipulation, false proof, or unauthorized assets or data.
-- [ ] Costs include implementation, media, tools, labor, support, maintenance, compliance, and downside.
-- [ ] Claims, permissions, platform rules, legal/privacy, security, accessibility, and reputation are visible.
-- [ ] Metrics include quality and harm guardrails, not just volume.
-- [ ] Expected outcomes are signals, not promises.
-- [ ] Every experiment has owner, cap, stop rule, and approval boundary.
-- [ ] No external action, spend, contact, post, purchase, product change, or publication occurred without approval.
-
-## Boundaries
-
-- `product-marketing` supplies approved positioning, audience, proof, and exclusions.
-- `customer-research` validates needs without uncontrolled profiling.
-- `content-strategy` designs sustainable content portfolios.
-- `b2b-ai-offer-strategy` packages complex AI services into evidence-backed offers.
-- Dedicated channel, software-development, research, creative, privacy, legal, and operational workflows govern execution.
-- This skill generates and prioritizes hypotheses; it does not silently implement them.
+Lokale, MIT-lizenzierte Hermes-Adaption des Skills `marketing-ideas` von Corey Haines auf Basis des Upstream-Commits `7868cb9251fad80a73d26e488a5ad5f6c4a9f335` (Homepage im Frontmatter). Abweichungskategorien: **Übersetzung**, **Umstrukturierung**, **DACH**-Lokalisierung und **Hermes-Sicherheit** durch Evidenztrennung, Risikoprüfung und Freigabe externer Aktionen. Details stehen im Repositorypfad `docs/UPSTREAM-AENDERUNGEN.md`.

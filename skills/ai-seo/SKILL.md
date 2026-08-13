@@ -1,234 +1,141 @@
 ---
 name: ai-seo
-description: "Use when auditing or improving AI-search visibility."
-version: 2.2.0-hermes.1
+description: "Sichtbarkeit, Zitierung und Empfehlung in KI-Antwortsystemen für Deutschland und den DACH-Raum evidenzbasiert prüfen und verbessern."
+version: 2.2.0-hermes.2
 author: Corey Haines; Hermes-curated adaptation
 license: MIT
 metadata:
   hermes:
     tags: [ai-seo, aeo, geo, llmo, ai-overviews, citations]
-    homepage: https://github.com/coreyhaines31/marketingskills/tree/main/skills/ai-seo
+    homepage: https://github.com/coreyhaines31/marketingskills/tree/7868cb9251fad80a73d26e488a5ad5f6c4a9f335/skills/ai-seo
     upstream_commit: 7868cb9251fad80a73d26e488a5ad5f6c4a9f335
 ---
 
-# AI SEO
+# KI-SEO
 
-Use this skill to improve how a brand or page is **retrieved, cited, mentioned, and recommended** in AI-generated answers. Treat traditional SEO, crawlability, useful content, and verifiable authority as the foundation; AI-specific structure is an additional layer, not a replacement.
+Verbessere, wie eine Marke oder Seite in KI-generierten Antworten **abgerufen, zitiert, erwähnt und empfohlen** wird. Klassische SEO, Crawlbarkeit, nützliche Inhalte und überprüfbare Autorität bilden die Grundlage; KI-spezifische Struktur ist nur eine zusätzliche Ebene.
 
-This is a locally curated Hermes adaptation of Corey Haines' MIT-licensed `ai-seo` skill at the pinned upstream commit shown in frontmatter. It removes an upstream-only tools-registry link and corrects crawler guidance that conflated training crawlers, search crawlers, and user-triggered fetchers.
+## Evidenzregeln
 
-## Evidence policy
+KI-Suchverhalten ändert sich schnell, viele Studien sind beobachtend. Vor aktuellen Prozentwerten, Crawlernamen, Plattform-Backends, Sichtbarkeitssteigerungen oder Mechanismen:
 
-AI-search behavior changes quickly and many public studies are observational. Before presenting current percentages, crawler names, platform backends, ranking weights, or claimed visibility uplifts:
+1. aktuelle Primärdokumentation oder Originalstudie prüfen;
+2. Quelle, Datum, Plattform/Modell, Region und Methode nennen;
+3. Korrelation nicht als Rankingfaktor oder Kausalität ausgeben;
+4. keine Zitate, Rankings, Empfehlungen oder Trafficwirkung versprechen;
+5. für Google-KI-Funktionen aktuelle Google-Hinweise zugrunde legen: normale Suchberechtigung und nutzerorientierte SEO; kein Spezial-Markup oder KI-Textfile als Pflicht behaupten.
 
-1. Check current first-party documentation or the cited primary study.
-2. State the source and date.
-3. Label correlation as correlation; do not present it as a ranking factor or causal guarantee.
-4. Do not promise citation, ranking, traffic, or recommendation outcomes.
-5. For Google AI features, default to Google's current guidance: normal Search eligibility and people-first SEO apply; no special AI markup or AI text file is required.
+**Keine erfundenen Rankingfaktoren.** Weder Strukturmuster, `llms.txt`, Schema, Erwähnungen, Autorenprofile noch Crawlerfreigaben als bestätigten KI-Rankingfaktor bezeichnen, sofern die jeweilige Plattform dies nicht aktuell und eindeutig dokumentiert.
 
-## Context first
+## Kontext und Sichtbarkeitsstufen
 
-If the project contains `.agents/product-marketing.md`, `.claude/product-marketing.md`, or `product-marketing-context.md`, read it before asking questions. Never search unrelated private directories, credentials, `.env`, auth files, or personal data.
+Erfasse Domain, Prioritätsseiten, Marke, Angebot, Zielgruppe, Region, Sprache, wichtige Prompts, Plattformen, Wettbewerber, Ausgangssichtbarkeit und Ziel. Keine privaten Verzeichnisse, Zugangsdaten oder personenbezogenen Daten durchsuchen.
 
-Collect only missing task context:
+Trenne:
 
-- Domain and priority pages
-- Brand, offer, audience, region, and language
-- 10–20 commercially important prompts or queries
-- Platforms to evaluate
-- Known competitors and existing visibility
-- Goal: retrieval, citation, mention, recommendation, or conversion
-- Existing SEO, schema, author, source, and analytics signals
+1. **Abgerufen:** System liest die Seite während der Antwortbildung.
+2. **Zitiert:** Seite erscheint als Quelle.
+3. **Erwähnt:** Marke steht im Antworttext.
+4. **Empfohlen:** Marke gelangt in eine Auswahlliste.
 
-## The visibility ladder
+Ein nützlicher Inhalt kann zitiert werden, ohne dass der Anbieter empfohlen wird. Empfehlungen können von überprüfbarer, webweiter Bestätigung durch Rezensionen, Communities, Fachmedien, Videos, Podcasts oder Analysten abhängen; dies ist keine Garantie.
 
-Keep these outcomes separate:
+## Audit-Ablauf
 
-1. **Retrieved** — the system reads the page while forming an answer.
-2. **Cited** — the page appears as a source.
-3. **Mentioned** — the brand appears in the answer text.
-4. **Recommended** — the brand enters the buyer's shortlist.
+### 1. Reproduzierbare Baseline
 
-A useful page can be cited while its publisher is not recommended. Recommendation depends heavily on web-wide corroboration: reviews, communities, analysts, earned media, videos, podcasts, and credible third-party discussion. For emerging brands, self-ranked “best tools” pages may teach the model about competitors without earning the publisher a recommendation.
-
-## Audit workflow
-
-### 1. Establish a reproducible baseline
-
-For each priority prompt, record:
-
-| Prompt | Platform/model | Date/region | Answer present | Brand retrieved/cited/mentioned/recommended | Sources | Framing |
+| Prompt | Plattform/Modell | Datum/Region/Sprache | Antwort | Abgerufen/zitiert/erwähnt/empfohlen | Quellen | Einordnung |
 |---|---|---|---|---|---|---|
 
-Run enough repeated checks to expose volatility. Do not infer stable visibility from one answer or one account.
+Wiederholte Prüfungen nutzen, um Volatilität sichtbar zu machen. Aus einer Antwort oder einem Konto keine stabile Sichtbarkeit ableiten.
 
-### 2. Check technical eligibility
+### 2. Technische Eignung
 
-- Page is publicly reachable with a successful status code.
-- Canonical, robots directives, sitemap, and indexability are coherent.
-- Essential content is available in rendered HTML and semantic structure.
-- Main content is not hidden behind login, consent, or client-side failure.
-- Titles, headings, authorship, publication/update dates, and internal links are clear.
-- Structured data matches visible page content and current platform eligibility rules.
-- Page works for visual, DOM, and accessibility-tree agents.
+Erreichbarkeit, Statuscode, Canonical, Robots, Sitemap, Indexierbarkeit, gerendertes HTML, semantische Struktur, Login-/Consent-Barrieren, Titel, Überschriften, Autorenschaft, Datum, interne Links und strukturierte Daten prüfen. Strukturierte Daten müssen sichtbare Inhalte korrekt abbilden und aktuelle Plattformregeln erfüllen. Visuelle, DOM- und Accessibility-Tree-Nutzbarkeit berücksichtigen.
 
-### 3. Check crawler policy precisely
+### 3. Crawler-Richtlinien präzise prüfen
 
-Do not use a blanket “allow all AI bots” recommendation. Identify each operator's current tokens and purpose from first-party docs:
+Keine pauschale Empfehlung „alle KI-Bots erlauben“. Aktuelle Tokens und Zwecke aus Primärquellen unterscheiden:
 
-- **Search/index crawlers** may affect discoverability.
-- **User-triggered fetchers** retrieve a page because a user requested it.
-- **Training crawlers** govern model-training use and may not control search citation.
+- Such-/Indexcrawler beeinflussen möglicherweise Auffindbarkeit;
+- nutzerausgelöste Fetcher rufen auf konkrete Anfrage ab;
+- Trainingscrawler regeln Modelltraining und steuern nicht zwingend Suchzitate.
 
-Important examples to verify live before editing `robots.txt`:
+OpenAI unterscheidet beispielsweise nach aktueller Dokumentation Suchbot, Nutzer-Fetcher und Trainingsbot; Google trennt `Google-Extended` vom normalen Search-Crawling. Anthropic, Perplexity und andere live prüfen. Datenschutz, Lizenzierung, Serverlast, Auffindbarkeit und Zitation abwägen. `robots.txt` nie ohne Freigabe und Validierung ändern.
 
-- OpenAI distinguishes `OAI-SearchBot`, `ChatGPT-User`, and `GPTBot`.
-- Google says `Google-Extended` is separate from Google Search crawling and does not control inclusion or ranking in Google Search, including AI features.
-- Anthropic and Perplexity publish separate bot documentation that can change.
+### 4. Extrahierbarkeit und Nutzwert
 
-Present privacy, licensing, server-load, discovery, and citation trade-offs. Never edit `robots.txt` without explicit approval and validation.
+Direkte, korrekte Antworten dort voranstellen, wo es natürlich ist; beschreibende H2/H3, fokussierte Absätze, echte Vergleichstabellen, Prozesslisten, selbstständige Aussagen, Definitionen, Grenzen, Daten, Einheiten und Beispiele verwenden. Landmarken, Überschriften und Alt-Texte korrekt setzen. Keine fragmentierte „KI-Köder“-Seite, keine Doorway-Varianten und keine massenhaft dünnen Inhalte erzeugen.
 
-### 4. Evaluate content extractability
+### 5. Autorität und Evidenz
 
-For each priority page:
+Primärquellen bevorzugen, Statistik mit Datum/Methodik versehen, praktische Erfahrung zeigen, echte Autorenschaft und relevante Qualifikation nennen, Fakt/Schätzung/Meinung/Anbieteraussage trennen und übertriebene oder veraltete Aussagen entfernen. Keine Statistiken, Zitate, Kunden, Rezensionen, Auszeichnungen, Qualifikationen oder Quellen erfinden.
 
-- Lead sections with a direct, accurate answer where natural.
-- Use descriptive H2/H3 headings matching real questions.
-- Keep each paragraph focused on one idea.
-- Use tables for genuine comparisons and numbered lists for processes.
-- Make key claims self-contained without turning the page into fragmented “AI bait.”
-- Include precise definitions, limitations, dates, units, and examples.
-- Ensure accessibility labels, landmarks, heading hierarchy, and alt text are correct.
+### 6. Externer Konsens
 
-Google-specific caution: write for people and organize normally. Do not create separate doorway-like AI content or mass-produce thin variants.
+Für Empfehlungsziele seriöse Bewertungsplattformen, Fachgemeinschaften, Branchenberichterstattung, redaktionell verdiente Reichweite, YouTube, Podcasts, Transkripte und konsistente Organisationsdaten prüfen. Nur authentische Beteiligung empfehlen; keine falschen Bewertungen, verdeckten Platzierungen, Wikipedia-Manipulation, Forenspam oder erfundenen Belege.
 
-### 5. Evaluate authority and evidence
+### 7. Maschinenlesbare Ergänzungen
 
-- Prefer original research, first-party documentation, and named primary sources.
-- Add dates and methodological context to statistics.
-- Show first-hand experience and concrete implementation detail.
-- Use real author names and relevant credentials where appropriate.
-- Separate facts, estimates, opinions, and vendor claims.
-- Remove unsupported superlatives and stale figures.
-- Cite original research rather than a marketing summary of it.
+`llms.txt`, öffentliche Markdown-Dokumentation, transparente Preis-/Spezifikationsdateien oder Feeds höchstens als messbare Zugänglichkeits-/Discovery-Experimente behandeln. Mit sichtbarem kanonischem Inhalt konsistent halten, nur wartbar einführen, keine vertraulichen Daten oder geschütztes Material offenlegen und nie als Google-Pflicht oder bestätigten Rankingfaktor bezeichnen. Aufkommende Protokolle bleiben experimentell, bis Erstanbieteradoption belegt ist.
 
-Never fabricate statistics, quotes, customers, reviews, awards, credentials, or citations.
+## Inhaltsmuster
 
-### 6. Evaluate off-site consensus
+- **Definition:** direkte Definition, Geltungsbereich, Abgrenzung und Nutzen.
+- **Prozess:** nummerierte, konkrete Handlungen mit Abschlusskriterien.
+- **Vergleich:** überprüfbare Kriterien, Eignung, Grenzen, Datum, Methodik und Quellen; Eigenangebot nicht automatisch zuerst.
+- **Evidenzblock:** Aussage, Primärquelle, Ergebnis mit Datum/Umfang, Einschränkung und praktische Folgerung.
+- **FAQ:** echte Nutzerfragen; FAQ-Markup nur bei sichtbarem Inhalt und aktuell zulässiger Verwendung.
 
-For recommendation goals, inspect:
+## Priorisierung und Messung
 
-- Relevant review platforms
-- Practitioner communities and forums
-- Analyst and industry coverage
-- Earned media
-- YouTube, podcasts, and transcript visibility
-- Accurate entity profiles and organization data
+Bewerte Geschäftsnutzen, Evidenzstärke, Aufwand, Täuschungs-/Richtlinienrisiko und Messbarkeit. Reihenfolge: Crawl-/Index-/Renderingfehler; falsche Aussagen; fehlende Kerninformation; schwache Struktur/Barrierefreiheit; fehlende Evidenz/Autorenschaft; externer Konsens; experimentelle Dateien.
 
-Recommend authentic participation only. Do not propose fake reviews, undisclosed placements, Wikipedia manipulation, forum spam, or fabricated citations.
+Messdreiklang:
 
-### 7. Assess machine-readable additions conservatively
+1. Prompt-Tracking mit Prompt, Datum, Modell, Region, Sprache, Quellen und Einordnung;
+2. freiwillige Selbstauskunft zur Herkunft;
+3. Vertriebs-/Gesprächsevidenz nur rechtmäßig und mit nötiger Einwilligung.
 
-Possible additions include `llms.txt`, public markdown documentation, transparent pricing/specification files, feeds, or other agent-readable resources. Treat them as accessibility/discovery experiments, not confirmed ranking factors.
+Zusätzlich markenbezogene Suche, qualifizierte Besuche, Conversions, Bot-Logs und zitierte Zielseiten beobachten. Direkter Traffic oder Markensuche kann Einfluss verschleiern; daraus nicht automatisch Kausalität ableiten.
 
-- Keep them consistent with visible canonical content.
-- Add them only when maintainable.
-- Do not expose confidential pricing, internal data, personal data, or gated IP.
-- Do not claim Google requires them for AI Overviews.
-- Validate links, freshness, and indexing behavior after deployment.
+## Deutscher/DACH-Kontext
 
-Treat OKF or similar emerging protocols as experimental until first-party adoption is confirmed.
+**Standardannahme ist Deutschland**, falls kein Zielmarkt genannt ist. Prompts, Quellen, Modelle, Sprachvarianten und Antwortregion müssen für Deutschland reproduzierbar dokumentiert werden. DSGVO/TDDDG, Urheber-, Marken- und Persönlichkeitsrechte sind konkrete Reviewpunkte bei Logs, Tracking, Trainings-/Crawlerentscheidungen, Quellenübernahme und personenbezogenen Inhalten. Keine Rechtsberatung und keine Rechtsgarantie.
 
-## Useful content patterns
+- **Deutschland:** deutsche Fachsprache, Suchintention, Anbieter-/Autorenvertrauen und Primärquellen berücksichtigen, ohne daraus Rankingfaktoren zu erfinden.
+- **Österreich:** österreichische Terminologie, Quellenlandschaft, Markt- und Rechtskontext separat testen.
+- **Schweiz:** deutsche, französische und italienische Prompts sowie Schweizer Quellen, Markt- und revDSG-Kontext getrennt untersuchen.
 
-### Definition
+Ein Ergebnis für Deutschland ist nicht automatisch auf AT/CH übertragbar. Plattformantworten können je Konto, Modell, Zeitpunkt, Sprache und Standort variieren.
 
-```markdown
-## What is [term]?
+## Ausgabeformat
 
-[Direct definition.] [Key scope or distinction.] [Why it matters.]
-```
+1. Umfang, Zielmarkt und Methodik
+2. Evidenzaufnahme mit Quellenständen
+3. Baseline-Tabelle je Prompt/Plattform/Region
+4. Befunde je Sichtbarkeitsstufe
+5. Befunde zu Struktur, Autorität und Präsenz
+6. Plattformspezifische Einschränkungen
+7. Priorisierte Maßnahmen mit Verantwortlichem, Aufwand, Wirkungshypothese und Validierung
+8. 30-/60-/90-Tage-Plan
+9. Messtabelle
+10. Unsicherheiten, experimentelle Annahmen und neu zu prüfende Aussagen
 
-### Process
+## Prüfliste
 
-```markdown
-## How to [goal]
+- [ ] Aktuelle Primärquellen und Datumsstände genannt
+- [ ] Abgerufen, zitiert, erwähnt und empfohlen getrennt
+- [ ] Mehrfachmessung und regionale/sprachliche Parameter dokumentiert
+- [ ] Keine erfundenen Rankingfaktoren oder Kausalitäten
+- [ ] Crawler nach Zweck statt pauschal bewertet
+- [ ] Technische Eignung und gerenderter Inhalt geprüft
+- [ ] Aussagen, Autoren, Statistik und Quellen verifiziert
+- [ ] Keine Doorways, Fake-Reviews oder Spam-Maßnahmen
+- [ ] Experimentelle Dateien klar als Experiment markiert
+- [ ] DE-Standardannahme sowie AT/CH separat ausgewiesen
+- [ ] Keine Website-, Crawler- oder Analyseänderung ohne Freigabe
 
-1. **[Step]** — [specific action]
-2. **[Step]** — [specific action]
-3. **[Step]** — [specific action]
-```
+## Herkunft und Abweichungen
 
-### Balanced comparison
-
-```markdown
-| Criterion | Option A | Option B |
-|---|---|---|
-| Best fit | ... | ... |
-| Limits | ... | ... |
-| Evidence/date | ... | ... |
-```
-
-Use verifiable criteria, current dates, primary sources, and explicit selection methodology. Do not rank the publisher first by default.
-
-### Evidence block
-
-```markdown
-[Claim]. [Primary source] reports [specific result, date, and scope]. [Limitation or context]. [Practical implication].
-```
-
-### FAQ
-
-Use genuine buyer questions. Answer directly, but add FAQ structured data only when current search-engine rules permit it and the Q&A is visibly present.
-
-## Prioritization
-
-Score each fix by:
-
-- Expected business value
-- Evidence strength
-- Implementation effort
-- Risk of misleading users or violating policy
-- Ability to measure the result
-
-Default priority:
-
-1. Crawl/index/render failures
-2. Incorrect or unsupported claims
-3. Missing core product/category information
-4. Weak page structure and accessibility
-5. Missing primary evidence and authorship
-6. Off-site consensus gaps
-7. Experimental machine-readable files
-
-## Measurement
-
-Use a measurement triad:
-
-1. **Prompt tracking** — repeated platform checks with prompt, date, model, region, citations, and framing.
-2. **Self-reported attribution** — “How did you hear about us?”
-3. **Sales/conversation evidence** — call notes or recordings where lawful and consented.
-
-Also monitor branded search, qualified visits, conversions, bot logs, and cited landing pages. AI influence often arrives through branded search or direct traffic rather than a visible referral.
-
-## Deliverable format
-
-Return:
-
-1. **Scope and methodology**
-2. **Evidence snapshot** with source dates
-3. **Findings by visibility rung**
-4. **Findings by Structure / Authority / Presence**
-5. **Platform-specific caveats**
-6. **Prioritized fixes** with owner, effort, impact hypothesis, and validation
-7. **30/60/90-day plan**
-8. **Measurement table**
-9. **Uncertainties and claims requiring revalidation**
-
-## Scope boundaries
-
-- Use a traditional SEO-audit workflow for broad ranking or traffic-loss investigations.
-- Validate schema against current official documentation and rich-result eligibility.
-- Do not modify websites, crawler policy, analytics, or third-party profiles without explicit approval.
-- Do not rely on unverified numeric claims from this or any upstream skill.
+Deutsche/DACH-Adaption des MIT-lizenzierten Ausgangs-Skills von Corey Haines; Homepage und Commit bleiben unverändert in den Metadaten. Gegenüber Commit `7868cb9251fad80a73d26e488a5ad5f6c4a9f335` wurden Haupttext und Beschreibung vollständig deutsch gefasst, Deutschland als Standardannahme sowie Österreich und Schweiz getrennt ergänzt. Nicht belegte Rankingfaktoren wurden ausdrücklich ausgeschlossen; Crawlerzwecke, volatile Promptmessung, experimentelle maschinenlesbare Dateien, Rechte und DACH-Lokalisierung wurden präzisiert. Der externe Werkzeugregister-Verweis der Ausgangsfassung bleibt entfernt und die Trennung von Trainingscrawlern, Suchcrawlern und Nutzer-Fetchern erhalten. Zentraler Nachweis: `docs/UPSTREAM-AENDERUNGEN.md`.
