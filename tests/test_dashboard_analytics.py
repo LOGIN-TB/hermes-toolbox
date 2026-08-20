@@ -92,6 +92,28 @@ class DashboardAnalyticsTests(unittest.TestCase):
         self.assertEqual("improved", exercise["change"]["status"])
         self.assertEqual(2, len(exercise["history"]))
 
+    def test_progress_keeps_equipment_trajectories_separate(self):
+        with self.gym.connect() as con:
+            now = "2026-08-01T10:00:00+02:00"
+            con.executemany(
+                "INSERT INTO equipment_aliases(id,exercise_id,alias,created_at) VALUES(?,?,?,?)",
+                [(1, 2, "Ruderzug A", now), (2, 2, "Ruderzug B", now)],
+            )
+            con.execute("UPDATE workout_sets SET equipment_alias_id=1 WHERE id IN (1,7)")
+            con.execute("UPDATE workout_sets SET equipment_alias_id=2 WHERE id IN (2,3,8,9)")
+            con.commit()
+
+        progress = self.gym.progress_data(self.gym.date(2026, 8, 19))
+        routine = next(item for item in progress["routines"] if item["name"] == "Rücken")
+        exercise = routine["exercises"][0]
+
+        self.assertEqual([2], exercise["latest"]["equipment_key"])
+        self.assertEqual("Ruderzug B", exercise["latest"]["equipment_alias"])
+        self.assertEqual(2, exercise["latest"]["sets"])
+        self.assertEqual(1562.5, exercise["latest"]["volume"])
+        self.assertEqual(2, len(exercise["history"]))
+        self.assertTrue(all(item["equipment_key"] == [2] for item in exercise["history"]))
+
     def test_heavier_top_set_with_lower_total_work_is_mixed(self):
         with self.gym.connect() as con:
             now = "2026-08-01T10:00:00+02:00"
@@ -121,6 +143,31 @@ class DashboardAnalyticsTests(unittest.TestCase):
         self.assertEqual("mixed", exercise["change"]["status"])
         self.assertGreater(exercise["change"]["estimated_1rm_pct"], 0)
         self.assertLess(exercise["change"]["volume_pct"], 0)
+
+    def test_status_thresholds_use_unrounded_percentages(self):
+        with self.gym.connect() as con:
+            now = "2026-08-01T10:00:00+02:00"
+            con.execute(
+                "INSERT INTO exercises(id,name,notes,unilateral,active) VALUES(6,'Grenzwertzug','',0,1)"
+            )
+            con.execute(
+                "INSERT INTO routine_exercises(id,routine_id,exercise_id,position,planned_sets,min_reps,max_reps,notes) "
+                "VALUES(6,2,6,4,1,8,12,'')"
+            )
+            con.executemany(
+                "INSERT INTO workout_sets(id,session_id,exercise_id,set_number,weight_kg,reps,recorded_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                [(200, 1, 6, 1, 100.0, 10, now), (201, 3, 6, 1, 100.96, 10, now)],
+            )
+            con.commit()
+
+        progress = self.gym.progress_data(self.gym.date(2026, 8, 19))
+        routine = next(item for item in progress["routines"] if item["name"] == "Rücken")
+        exercise = next(item for item in routine["exercises"] if item["name"] == "Grenzwertzug")
+
+        self.assertEqual(1.0, exercise["change"]["estimated_1rm_pct"])
+        self.assertEqual(1.0, exercise["change"]["volume_pct"])
+        self.assertEqual("stable", exercise["change"]["status"])
 
     def test_progress_keeps_best_set_visible_below_target_rep_range(self):
         with self.gym.connect() as con:
@@ -162,6 +209,26 @@ class DashboardAnalyticsTests(unittest.TestCase):
         self.assertEqual(5.2, comparison["volume_pct"])
         self.assertEqual("Ruderzug", overview["highlights"][0]["exercise_name"])
         self.assertEqual("weight", overview["highlights"][0]["kind"])
+
+    def test_overview_keeps_latest_activity_outside_chart_window(self):
+        with self.gym.connect() as con:
+            con.execute("DELETE FROM sessions")
+            con.execute(
+                "INSERT INTO sessions(id,routine_id,session_date,started_at,completed_at,notes) "
+                "VALUES(10,2,'2026-01-10','2026-01-10T18:00:00+01:00',"
+                "'2026-01-10T19:00:00+01:00','')"
+            )
+            con.execute(
+                "INSERT INTO workout_sets(id,session_id,exercise_id,set_number,weight_kg,reps,recorded_at) "
+                "VALUES(100,10,2,1,70,10,'2026-01-10T18:10:00+01:00')"
+            )
+            con.commit()
+
+        overview = self.gym.overview_data(self.gym.date(2026, 8, 19))
+
+        self.assertEqual(["2026-01-10"], [item["session_date"] for item in overview["recent_sessions"]])
+        self.assertEqual("2026-01-10", overview["latest_comparison"]["session_date"])
+        self.assertTrue(all(item["volume"] == 0 for item in overview["weekly_volume"]))
 
 
 if __name__ == "__main__":

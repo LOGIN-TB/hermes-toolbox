@@ -469,11 +469,17 @@ def home_data() -> dict:
     }
 
 
-def percentage_change(previous: float, current: float) -> float | None:
-    """Return a bounded one-decimal percentage or None when no baseline exists."""
+def percentage_change_exact(previous: float, current: float) -> float | None:
+    """Return the unrounded percentage or None when no baseline exists."""
     if not previous:
         return None
-    return round((float(current) / float(previous) - 1) * 100, 1)
+    return (float(current) / float(previous) - 1) * 100
+
+
+def percentage_change(previous: float, current: float) -> float | None:
+    """Return a bounded one-decimal percentage or None when no baseline exists."""
+    change = percentage_change_exact(previous, current)
+    return round(change, 1) if change is not None else None
 
 
 def session_duration_minutes(started_at: str, completed_at: str | None) -> int | None:
@@ -535,17 +541,20 @@ def progress_data(reference_date: date | None = None) -> dict:
         previous_session = routine_sessions[-2] if len(routine_sessions) > 1 else None
         exercise_results = []
         for exercise in exercises_by_routine.get(routine["id"], []):
+            exercise_sets = sets_by_exercise.get((routine["id"], exercise["exercise_id"]), [])
+            selected_equipment_id = (exercise_sets[-1]["equipment_alias_id"] or 0) if exercise_sets else None
             grouped: dict[int, list[dict]] = {}
-            for workout_set in sets_by_exercise.get((routine["id"], exercise["exercise_id"]), []):
+            for workout_set in exercise_sets:
+                if (workout_set["equipment_alias_id"] or 0) != selected_equipment_id:
+                    continue
                 grouped.setdefault(workout_set["session_id"], []).append(workout_set)
             history = []
             for session in routine_sessions:
                 workout_sets = grouped.get(session["id"], [])
                 if not workout_sets:
                     continue
-                equipment_keys = sorted({item["equipment_alias_id"] or 0 for item in workout_sets})
-                aliases = sorted({item["equipment_alias"] for item in workout_sets if item["equipment_alias"]})
-                qualifying = [item for item in workout_sets if item["reps"] >= exercise["min_reps"]]
+                equipment_alias = next((item["equipment_alias"] for item in workout_sets
+                                        if item["equipment_alias"]), None)
                 best = max(workout_sets, key=lambda item: (item["weight_kg"], item["reps"]))
                 total_reps = sum(item["reps"] for item in workout_sets)
                 total_volume = round(sum(float(item["weight_kg"]) * item["reps"] for item in workout_sets), 2)
@@ -562,8 +571,8 @@ def progress_data(reference_date: date | None = None) -> dict:
                     "target_sets": sum(item["reps"] >= exercise["min_reps"] for item in workout_sets),
                     "ready_to_increase": len(workout_sets) >= exercise["planned_sets"] and
                         all(item["reps"] >= exercise["max_reps"] for item in workout_sets),
-                    "equipment_key": equipment_keys,
-                    "equipment_alias": ", ".join(aliases) if aliases else None,
+                    "equipment_key": [selected_equipment_id],
+                    "equipment_alias": equipment_alias,
                 })
             latest = history[-1] if history else None
             previous = None
@@ -578,17 +587,20 @@ def progress_data(reference_date: date | None = None) -> dict:
                 if latest["best_weight_kg"] is not None and previous["best_weight_kg"] is not None:
                     weight_delta = round(latest["best_weight_kg"] - previous["best_weight_kg"], 2)
                 reps_delta = latest["reps"] - previous["reps"]
-                volume_pct = percentage_change(previous["volume"], latest["volume"])
-                estimated_1rm_pct = percentage_change(previous["estimated_1rm_kg"],
-                                                      latest["estimated_1rm_kg"])
+                raw_volume_pct = percentage_change_exact(previous["volume"], latest["volume"])
+                raw_estimated_1rm_pct = percentage_change_exact(previous["estimated_1rm_kg"],
+                                                                latest["estimated_1rm_kg"])
+                volume_pct = round(raw_volume_pct, 1) if raw_volume_pct is not None else None
+                estimated_1rm_pct = round(raw_estimated_1rm_pct, 1) \
+                    if raw_estimated_1rm_pct is not None else None
                 average_weight_pct = percentage_change(previous["average_weight_kg"],
                                                        latest["average_weight_kg"])
                 target_sets_delta = latest["target_sets"] - previous["target_sets"]
-                improvements = [estimated_1rm_pct is not None and estimated_1rm_pct >= 1,
-                                volume_pct is not None and volume_pct >= 2,
+                improvements = [raw_estimated_1rm_pct is not None and raw_estimated_1rm_pct >= 1,
+                                raw_volume_pct is not None and raw_volume_pct >= 2,
                                 target_sets_delta > 0]
-                regressions = [estimated_1rm_pct is not None and estimated_1rm_pct <= -1,
-                               volume_pct is not None and volume_pct <= -2,
+                regressions = [raw_estimated_1rm_pct is not None and raw_estimated_1rm_pct <= -1,
+                               raw_volume_pct is not None and raw_volume_pct <= -2,
                                target_sets_delta < 0]
                 has_improvement = any(improvements)
                 has_regression = any(regressions)
@@ -648,18 +660,23 @@ def overview_data(reference_date: date | None = None) -> dict:
             aggregate_sql + " AND s.session_date>=? AND s.session_date<?",
             (week_start.isoformat(), week_end.isoformat()),
         ).fetchone())
-        session_rows = rows(con.execute("""SELECT s.id,s.routine_id,s.session_date,
+        session_sql = """SELECT s.id,s.routine_id,s.session_date,
             s.started_at,s.completed_at,r.name routine_name,
             COUNT(w.id) sets,COALESCE(SUM(w.reps),0) reps,
             ROUND(COALESCE(SUM(w.weight_kg*w.reps),0),1) volume
             FROM sessions s JOIN routines r ON r.id=s.routine_id
             LEFT JOIN workout_sets w ON w.session_id=s.id
-            WHERE s.completed_at IS NOT NULL AND s.session_date>=?
+            WHERE s.completed_at IS NOT NULL"""
+        session_rows = rows(con.execute(
+            session_sql + """ AND s.session_date>=?
             GROUP BY s.id ORDER BY s.session_date DESC,s.id DESC""",
-            (series_start.isoformat(),)))
-        for item in session_rows:
+            (series_start.isoformat(),),
+        ))
+        recent_sessions = rows(con.execute(
+            session_sql + " GROUP BY s.id ORDER BY s.session_date DESC,s.id DESC LIMIT 8"
+        ))
+        for item in session_rows + recent_sessions:
             item["duration_minutes"] = session_duration_minutes(item["started_at"], item["completed_at"])
-        recent_sessions = session_rows[:8]
         buckets = []
         for offset in range(12):
             start = series_start + timedelta(weeks=offset)

@@ -1,4 +1,5 @@
-const CACHE = 'gympilot-shell-v29';
+const CACHE = 'gympilot-shell-v30';
+const PRIVATE_CACHE = 'gympilot-private-dashboard-v3';
 const SHELL = [
   '/',
   '/index.html',
@@ -31,7 +32,10 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(Promise.all([
     caches.keys().then(keys => Promise.all(
-      keys.filter(key => key.startsWith('gympilot-shell-') && key !== CACHE).map(key => caches.delete(key)),
+      keys.filter(key =>
+        (key.startsWith('gympilot-shell-') && key !== CACHE) ||
+        (key.startsWith('gympilot-private-dashboard-') && key !== PRIVATE_CACHE)
+      ).map(key => caches.delete(key)),
     )),
     self.clients.claim(),
   ]));

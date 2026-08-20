@@ -756,7 +756,7 @@ const swContext = vm.createContext({
   },
 });
 vm.runInContext(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), swContext);
-assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v29/);
+assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v30/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /['"]\/theme\.js['"]/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /apple-touch-icon-v20\.png/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /icon-512-v20\.png/);
@@ -811,7 +811,10 @@ const coldContext = vm.createContext({
   caches: {
     async match() { return null; },
     async open() { return {match: async request => request === '/index.html' ? shellResponse : null, put: async () => {}}; },
-    async keys() { return ['gympilot-shell-v8', 'gympilot-shell-v9', 'gympilot-private-dashboard-v1']; },
+    async keys() {
+      return ['gympilot-shell-v8', 'gympilot-shell-v9',
+        'gympilot-private-dashboard-v1', 'gympilot-private-dashboard-v3'];
+    },
     async delete(key) { deletedCaches.push(key); return true; },
   },
   self: {
@@ -841,7 +844,9 @@ assert.equal(activationFinished, false);
 releaseClaim();
 await activationPromise;
 assert.equal(activationFinished, true);
-assert.deepEqual(deletedCaches.sort(), ['gympilot-shell-v8', 'gympilot-shell-v9']);
+assert.deepEqual(deletedCaches.sort(), [
+  'gympilot-private-dashboard-v1', 'gympilot-shell-v8', 'gympilot-shell-v9',
+]);
 
 const indexHtml = fs.readFileSync('skills/gym/assets/web/index.html', 'utf8');
 assert.match(indexHtml, /rel="apple-touch-icon"[^>]+href="\/apple-touch-icon-v20\.png"/);
