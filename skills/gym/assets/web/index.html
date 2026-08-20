@@ -25,16 +25,20 @@
 
 <main>
   <section class="view" data-view="overview" id="overview-view">
-    <div class="intro"><p class="eyebrow"><span>LOKALES DASHBOARD</span><span id="dashboardDate">–</span></p><h1>Fortschritt,<br><em>der sichtbar wird.</em></h1></div>
+    <div class="intro"><p class="eyebrow"><span>LOKALES DASHBOARD</span><span id="dashboardDate">–</span></p><h1>Deine Woche<br><em>auf einen Blick.</em></h1></div>
     <article class="feature-card" id="nextTraining"><span class="skeleton">Nächste Einheit wird geladen …</span></article>
-    <section class="metric-grid" aria-label="Wochenübersicht">
+    <article class="panel week-panel">
+      <div class="panel-head"><div><span class="eyebrow">WOCHENPLAN</span><h2 id="weekGoal">Trainingstage werden geladen …</h2></div></div>
+      <div id="weekSchedule" class="week-schedule" aria-label="Trainingsstatus dieser Woche"></div>
+    </article>
+    <section class="metric-grid overview-metrics" aria-label="Wochenübersicht">
       <article><span>Einheiten</span><strong id="weekSessions">0</strong><small>diese Woche</small></article>
       <article><span>Arbeitssätze</span><strong id="weekSets">0</strong><small>protokolliert</small></article>
       <article><span>Wiederholungen</span><strong id="weekReps">0</strong><small>über alle Übungen</small></article>
-      <article class="accent-card"><span>Trainingsvolumen</span><strong id="weekVolume">0 kg</strong><small>Gewicht × Wiederholungen</small></article>
     </section>
-    <article class="panel chart-panel"><div class="panel-head"><div><span class="eyebrow">LETZTE 12 WOCHEN</span><h2>Trainingsvolumen</h2></div><span class="legend"><i></i> Volumen</span></div><div id="overviewChart" class="chart-wrap"></div></article>
-    <article class="panel"><div class="panel-head"><div><span class="eyebrow">VERLAUF</span><h2>Letzte Einheiten</h2></div></div><div id="overviewHistory" class="history-list"></div></article>
+    <article class="panel" id="latestComparison"><p class="empty">Noch keine abgeschlossene Einheit.</p></article>
+    <article class="panel"><div class="panel-head"><div><span class="eyebrow">ENTWICKLUNG</span><h2>Aktuelle Fortschritte</h2></div></div><div id="overviewHighlights" class="highlight-list"></div></article>
+    <article class="panel"><div class="panel-head"><div><span class="eyebrow">ZULETZT</span><h2>Letzte Aktivitäten</h2></div></div><div id="overviewHistory" class="history-list"></div></article>
   </section>
 
   <section class="view" data-view="training" id="training-view" hidden>
@@ -46,15 +50,12 @@
   </section>
 
   <section class="view" data-view="progress" id="progress-view" hidden>
-    <div class="section-title"><span class="eyebrow">AUSWERTUNG</span><h1>Fortschritt</h1><p>Gesamtwerte und Entwicklung deiner abgeschlossenen Einheiten.</p></div>
-    <section class="metric-grid totals" aria-label="Gesamtfortschritt">
-      <article><span>Einheiten gesamt</span><strong id="totalSessions">0</strong></article>
-      <article><span>Sätze gesamt</span><strong id="totalSets">0</strong></article>
-      <article><span>Wiederholungen</span><strong id="totalReps">0</strong></article>
-      <article class="accent-card"><span>Gesamtvolumen</span><strong id="totalVolume">0 kg</strong></article>
-    </section>
-    <article class="panel chart-panel"><div class="panel-head"><div><span class="eyebrow">LETZTE 12 WOCHEN</span><h2>Volumenentwicklung</h2></div><span class="legend"><i></i> Volumen</span></div><div id="progressChart" class="chart-wrap"></div></article>
-    <article class="panel"><div class="panel-head"><div><span class="eyebrow">TRAININGSHISTORIE</span><h2>Letzte Einheiten</h2></div></div><div id="progressHistory" class="history-list"></div></article>
+    <div class="section-title"><span class="eyebrow">AUSWERTUNG</span><h1>Fortschritt</h1><p>Vergleiche dieselbe Routine und dieselben Übungen miteinander.</p></div>
+    <div id="progressRoutineSelector" class="day-selector progress-selector" aria-label="Routine für die Auswertung auswählen"></div>
+    <p class="helper">Der Leistungswert verbindet Gewicht und Wiederholungen zu einer Schätzung. Er ist kein getestetes Maximalgewicht.</p>
+    <article class="panel" id="progressRoutineSummary"><p class="empty">Noch keine abgeschlossenen Einheiten.</p></article>
+    <div id="exerciseProgressList" class="progress-exercise-list"></div>
+    <article class="panel"><div class="panel-head"><div><span class="eyebrow">TRAININGSHISTORIE</span><h2 id="progressHistoryTitle">Einheiten dieser Routine</h2></div></div><div id="progressHistory" class="history-list"></div></article>
   </section>
 
   <section class="view" data-view="plan" id="plan-view" hidden>

@@ -59,10 +59,43 @@ const liveData = {
     date: '2026-08-08',
     this_week: {sessions: 1, sets: 3, reps: 30, volume: 2400},
     totals: {sessions: 8, sets: 24, reps: 240, volume: 19200},
-    next_routine: {name: 'Beine', weekday: 5, exercise_count: 1, planned_sets: 3},
+    week_adherence: {completed: 1, planned: 1},
+    week_schedule: [{
+      name: 'Beine', day_name: 'Freitag', weekday: 5, scheduled_date: '2026-08-07', status: 'completed',
+    }],
+    next_routine: {name: 'Beine', weekday: 5, exercise_count: 1, planned_sets: 3, days_until: 6},
     weekly_volume: [{week_start: '2026-08-03', volume: 2400}],
     recent_sessions: [{session_date: '2026-08-01', routine_name: 'Beine', sets: 3, reps: 30, volume: 2400}],
+    latest_comparison: null,
+    highlights: [],
   },
+  progress: {date: '2026-08-08', routines: [{
+    id: 7, name: 'Beine', sessions_count: 1,
+    latest: {id: 17, routine_id: 7, session_date: '2026-08-07', sets: 3, reps: 30, volume: 2400, duration_minutes: 60},
+    previous: null, change: {volume_pct: null, reps_delta: null}, improved_exercises: 0,
+    exercises: [{
+      exercise_id: 9, name: 'Kniebeuge', planned_sets: 3, min_reps: 8, max_reps: 12,
+      sessions_count: 1, change: {status: 'new', volume_pct: null, reps_delta: null,
+        best_weight_delta_kg: null, estimated_1rm_pct: null, average_weight_pct: null,
+        target_sets_delta: null},
+      latest: {session_id: 17, session_date: '2026-08-07', sets: 3, reps: 30,
+        volume: 2400, best_weight_kg: 80, best_reps: 10, estimated_1rm_kg: 106.67,
+        average_weight_kg: 80, target_sets: 3, ready_to_increase: false,
+        equipment_key: [0], equipment_alias: null},
+      previous: null, record: {session_id: 17, session_date: '2026-08-07', sets: 3,
+        reps: 30, volume: 2400, best_weight_kg: 80, best_reps: 10,
+        estimated_1rm_kg: 106.67, average_weight_kg: 80, target_sets: 3,
+        ready_to_increase: false, equipment_key: [0], equipment_alias: null},
+      history: [{session_id: 17, session_date: '2026-08-07', sets: 3, reps: 30,
+        volume: 2400, best_weight_kg: 80, best_reps: 10, estimated_1rm_kg: 106.67,
+        average_weight_kg: 80, target_sets: 3, ready_to_increase: false,
+        equipment_key: [0], equipment_alias: null}],
+    }],
+    history: [{id: 17, routine_id: 7, session_date: '2026-08-07', sets: 3,
+      reps: 30, volume: 2400, duration_minutes: 60}],
+  }], recent_sessions: [{id: 17, routine_id: 7, session_date: '2026-08-07',
+    sets: 3, reps: 30, volume: 2400, duration_minutes: 60}]},
+
   routines: {'7': {...todayData, routine: routineDetail}},
 };
 let writtenSnapshot = null;
@@ -169,8 +202,14 @@ await assert.rejects(
 assert.equal(__gymPilotTest.validDashboardSnapshot(cachedSnapshot), true);
 const corruptions = [
   snapshot => { delete snapshot.overview.this_week; },
-  snapshot => { snapshot.overview.weekly_volume = null; },
+  snapshot => { snapshot.overview.week_adherence = null; },
   snapshot => { snapshot.overview.recent_sessions[0].session_date = 'not-a-date'; },
+  snapshot => { snapshot.overview.highlights = [null]; },
+  snapshot => { snapshot.overview.latest_comparison = {routine_name: 'Beine'}; },
+  snapshot => { delete snapshot.overview.week_schedule[0].day_name; },
+  snapshot => { snapshot.progress.routines[0].latest = {session_date: '2026-08-01'}; },
+  snapshot => { snapshot.progress.routines[0].history = [null]; },
+  snapshot => { snapshot.progress.recent_sessions = [null]; },
   snapshot => { snapshot.today.plan[0].weekdays = '5'; },
   snapshot => { snapshot.today.plan[0].id = '<img src=x onerror=alert(1)>'; },
   snapshot => { snapshot.routines['7'].routine.exercises[0].current_progress = null; },
@@ -195,6 +234,7 @@ const apiResponses = {
   '/api/health': {status: 'ok', auth_required: false},
   '/api/today': {profile: {units: 'metric'}, plan: [{id: 7}, {id: 8}], routine: {id: 7}},
   '/api/overview': {date: '2026-08-08'},
+  '/api/progress': {date: '2026-08-08', routines: []},
   '/api/today?routine=7': {routine: {id: 7, name: 'Beine'}},
   '/api/today?routine=8': {routine: {id: 8, name: 'Rücken'}},
 };
@@ -205,7 +245,7 @@ const fetchedLive = await __gymPilotTest.fetchLiveDashboard(async path => {
 assert.deepEqual(Object.keys(fetchedLive.routines), ['7', '8']);
 assert.equal(fetchedLive.routines['8'].routine.name, 'Rücken');
 assert.deepEqual(requestedPaths, [
-  '/api/health', '/api/today', '/api/overview',
+  '/api/health', '/api/today', '/api/overview', '/api/progress',
   '/api/today?routine=7', '/api/today?routine=8',
 ]);
 
@@ -680,7 +720,7 @@ assert.equal(elements.themeToggle.attributes['aria-label'], 'Dunkelmodus');
 assert.match(appSource, /fetchDashboardWithTimeout\(signal => fetchLiveDashboard\(api, dashboardStore, signal\)\)/);
 assert.match(appSource, /createMirroredDashboardDriver\(dashboardDrivers\)/);
 assert.match(appSource, /createCacheStorageDriver\(globalThis\.caches\)/);
-assert.match(appSource, /GYMPILOT_WEB_BUILD\s*=\s*'diagnostic-v22'/);
+assert.match(appSource, /GYMPILOT_WEB_BUILD\s*=\s*'balanced-progress-v24'/);
 assert.match(appSource, /collectGymPilotDiagnostics/);
 assert.match(appSource, /dashboardStore\.diagnostics/);
 for (const forbiddenPath of ['/api/session/start', '/api/set', '/api/session/finish', '/api/plan/']) {
@@ -716,7 +756,7 @@ const swContext = vm.createContext({
   },
 });
 vm.runInContext(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), swContext);
-assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v25/);
+assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v29/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /['"]\/theme\.js['"]/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /apple-touch-icon-v20\.png/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /icon-512-v20\.png/);

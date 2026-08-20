@@ -469,8 +469,170 @@ def home_data() -> dict:
     }
 
 
+def percentage_change(previous: float, current: float) -> float | None:
+    """Return a bounded one-decimal percentage or None when no baseline exists."""
+    if not previous:
+        return None
+    return round((float(current) / float(previous) - 1) * 100, 1)
+
+
+def session_duration_minutes(started_at: str, completed_at: str | None) -> int | None:
+    """Return a plausible completed session duration; reject stale multi-day sessions."""
+    if not completed_at:
+        return None
+    try:
+        seconds = (datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+    if seconds < 0 or seconds > 12 * 60 * 60:
+        return None
+    return round(seconds / 60)
+
+
+def progress_data(reference_date: date | None = None) -> dict:
+    """Compare like-for-like routines and exercises across completed sessions."""
+    ensure()
+    current = reference_date or date.today()
+    with connect() as con:
+        routine_rows = rows(con.execute("""SELECT r.id,r.name,r.active,
+            COALESCE(r.plan_position,r.id) plan_position
+            FROM routines r WHERE r.active=1 ORDER BY plan_position,r.id"""))
+        session_rows = rows(con.execute("""SELECT s.id,s.routine_id,s.session_date,s.started_at,s.completed_at,
+            COUNT(w.id) sets,COALESCE(SUM(w.reps),0) reps,
+            ROUND(COALESCE(SUM(w.weight_kg*w.reps),0),2) volume
+            FROM sessions s LEFT JOIN workout_sets w ON w.session_id=s.id
+            WHERE s.completed_at IS NOT NULL AND s.session_date<=?
+            GROUP BY s.id ORDER BY s.session_date,s.id""", (current.isoformat(),)))
+        exercise_rows = rows(con.execute("""SELECT re.routine_id,e.id exercise_id,e.name,
+            re.position,re.planned_sets,re.min_reps,re.max_reps
+            FROM routine_exercises re JOIN exercises e ON e.id=re.exercise_id
+            JOIN routines r ON r.id=re.routine_id
+            WHERE r.active=1 ORDER BY re.routine_id,re.position,e.id"""))
+        set_rows = rows(con.execute("""SELECT s.id session_id,s.routine_id,s.session_date,
+            w.exercise_id,w.equipment_alias_id,a.alias equipment_alias,
+            w.weight_kg,w.reps,w.set_number,w.side
+            FROM sessions s JOIN workout_sets w ON w.session_id=s.id
+            LEFT JOIN equipment_aliases a ON a.id=w.equipment_alias_id
+            WHERE s.completed_at IS NOT NULL AND s.session_date<=?
+            ORDER BY s.session_date,s.id,w.exercise_id,w.set_number,w.id""", (current.isoformat(),)))
+
+    sessions_by_routine: dict[int, list[dict]] = {}
+    for item in session_rows:
+        item["duration_minutes"] = session_duration_minutes(item["started_at"], item["completed_at"])
+        sessions_by_routine.setdefault(item["routine_id"], []).append(item)
+
+    sets_by_exercise: dict[tuple[int, int], list[dict]] = {}
+    for item in set_rows:
+        sets_by_exercise.setdefault((item["routine_id"], item["exercise_id"]), []).append(item)
+    exercises_by_routine: dict[int, list[dict]] = {}
+    for item in exercise_rows:
+        exercises_by_routine.setdefault(item["routine_id"], []).append(item)
+
+    routines = []
+    for routine in routine_rows:
+        routine_sessions = sessions_by_routine.get(routine["id"], [])
+        latest_session = routine_sessions[-1] if routine_sessions else None
+        previous_session = routine_sessions[-2] if len(routine_sessions) > 1 else None
+        exercise_results = []
+        for exercise in exercises_by_routine.get(routine["id"], []):
+            grouped: dict[int, list[dict]] = {}
+            for workout_set in sets_by_exercise.get((routine["id"], exercise["exercise_id"]), []):
+                grouped.setdefault(workout_set["session_id"], []).append(workout_set)
+            history = []
+            for session in routine_sessions:
+                workout_sets = grouped.get(session["id"], [])
+                if not workout_sets:
+                    continue
+                equipment_keys = sorted({item["equipment_alias_id"] or 0 for item in workout_sets})
+                aliases = sorted({item["equipment_alias"] for item in workout_sets if item["equipment_alias"]})
+                qualifying = [item for item in workout_sets if item["reps"] >= exercise["min_reps"]]
+                best = max(workout_sets, key=lambda item: (item["weight_kg"], item["reps"]))
+                total_reps = sum(item["reps"] for item in workout_sets)
+                total_volume = round(sum(float(item["weight_kg"]) * item["reps"] for item in workout_sets), 2)
+                estimated_1rm = max(float(item["weight_kg"]) * (1 + item["reps"] / 30)
+                                    for item in workout_sets)
+                history.append({
+                    "session_id": session["id"], "session_date": session["session_date"],
+                    "sets": len(workout_sets), "reps": total_reps,
+                    "volume": total_volume,
+                    "best_weight_kg": float(best["weight_kg"]) if best else None,
+                    "best_reps": best["reps"] if best else None,
+                    "estimated_1rm_kg": round(estimated_1rm, 2),
+                    "average_weight_kg": round(total_volume / total_reps, 2) if total_reps else None,
+                    "target_sets": sum(item["reps"] >= exercise["min_reps"] for item in workout_sets),
+                    "ready_to_increase": len(workout_sets) >= exercise["planned_sets"] and
+                        all(item["reps"] >= exercise["max_reps"] for item in workout_sets),
+                    "equipment_key": equipment_keys,
+                    "equipment_alias": ", ".join(aliases) if aliases else None,
+                })
+            latest = history[-1] if history else None
+            previous = None
+            if latest:
+                previous = next((item for item in reversed(history[:-1])
+                                 if item["equipment_key"] == latest["equipment_key"]), None)
+            change = {"status": "new", "volume_pct": None, "reps_delta": None,
+                      "best_weight_delta_kg": None, "estimated_1rm_pct": None,
+                      "average_weight_pct": None, "target_sets_delta": None}
+            if latest and previous:
+                weight_delta = None
+                if latest["best_weight_kg"] is not None and previous["best_weight_kg"] is not None:
+                    weight_delta = round(latest["best_weight_kg"] - previous["best_weight_kg"], 2)
+                reps_delta = latest["reps"] - previous["reps"]
+                volume_pct = percentage_change(previous["volume"], latest["volume"])
+                estimated_1rm_pct = percentage_change(previous["estimated_1rm_kg"],
+                                                      latest["estimated_1rm_kg"])
+                average_weight_pct = percentage_change(previous["average_weight_kg"],
+                                                       latest["average_weight_kg"])
+                target_sets_delta = latest["target_sets"] - previous["target_sets"]
+                improvements = [estimated_1rm_pct is not None and estimated_1rm_pct >= 1,
+                                volume_pct is not None and volume_pct >= 2,
+                                target_sets_delta > 0]
+                regressions = [estimated_1rm_pct is not None and estimated_1rm_pct <= -1,
+                               volume_pct is not None and volume_pct <= -2,
+                               target_sets_delta < 0]
+                has_improvement = any(improvements)
+                has_regression = any(regressions)
+                status = "mixed" if has_improvement and has_regression else \
+                    "improved" if has_improvement else "declined" if has_regression else "stable"
+                change = {
+                    "status": status,
+                    "volume_pct": volume_pct, "reps_delta": reps_delta,
+                    "best_weight_delta_kg": weight_delta,
+                    "estimated_1rm_pct": estimated_1rm_pct,
+                    "average_weight_pct": average_weight_pct,
+                    "target_sets_delta": target_sets_delta,
+                }
+            comparable_history = [item for item in history
+                                  if not latest or item["equipment_key"] == latest["equipment_key"]]
+            record = max(comparable_history, key=lambda item: (
+                item["best_weight_kg"] if item["best_weight_kg"] is not None else -1,
+                item["best_reps"] if item["best_reps"] is not None else -1,
+            )) if comparable_history else None
+            exercise_results.append({**exercise, "sessions_count": len(history),
+                                     "latest": latest, "previous": previous,
+                                     "change": change, "record": record,
+                                     "history": history[-12:]})
+        latest_summary = dict(latest_session) if latest_session else None
+        previous_summary = dict(previous_session) if previous_session else None
+        routine_change = {"volume_pct": None, "reps_delta": None}
+        if latest_summary and previous_summary:
+            routine_change = {
+                "volume_pct": percentage_change(previous_summary["volume"], latest_summary["volume"]),
+                "reps_delta": latest_summary["reps"] - previous_summary["reps"],
+            }
+        routines.append({**routine, "sessions_count": len(routine_sessions),
+                         "latest": latest_summary, "previous": previous_summary,
+                         "change": routine_change,
+                         "improved_exercises": sum(item["change"]["status"] == "improved"
+                                                   for item in exercise_results),
+                         "exercises": exercise_results,
+                         "history": list(reversed(routine_sessions[-12:]))})
+    return {"date": current.isoformat(), "routines": routines,
+            "recent_sessions": list(reversed(session_rows[-20:]))}
+
+
 def overview_data(reference_date: date | None = None) -> dict:
-    """Return local dashboard metrics, a 12-week series and recent sessions."""
+    """Return actionable current-week status and a bounded recent history."""
     ensure()
     current = reference_date or date.today()
     week_start = current - timedelta(days=current.weekday())
@@ -486,7 +648,8 @@ def overview_data(reference_date: date | None = None) -> dict:
             aggregate_sql + " AND s.session_date>=? AND s.session_date<?",
             (week_start.isoformat(), week_end.isoformat()),
         ).fetchone())
-        session_rows = rows(con.execute("""SELECT s.id,s.session_date,r.name routine_name,
+        session_rows = rows(con.execute("""SELECT s.id,s.routine_id,s.session_date,
+            s.started_at,s.completed_at,r.name routine_name,
             COUNT(w.id) sets,COALESCE(SUM(w.reps),0) reps,
             ROUND(COALESCE(SUM(w.weight_kg*w.reps),0),1) volume
             FROM sessions s JOIN routines r ON r.id=s.routine_id
@@ -494,6 +657,8 @@ def overview_data(reference_date: date | None = None) -> dict:
             WHERE s.completed_at IS NOT NULL AND s.session_date>=?
             GROUP BY s.id ORDER BY s.session_date DESC,s.id DESC""",
             (series_start.isoformat(),)))
+        for item in session_rows:
+            item["duration_minutes"] = session_duration_minutes(item["started_at"], item["completed_at"])
         recent_sessions = session_rows[:8]
         buckets = []
         for offset in range(12):
@@ -508,15 +673,73 @@ def overview_data(reference_date: date | None = None) -> dict:
             FROM routines r JOIN routine_days d ON d.routine_id=r.id
             LEFT JOIN routine_exercises re ON re.routine_id=r.id
             WHERE r.active=1 GROUP BY r.id,d.weekday"""))
+        completed_week = {(item["routine_id"], item["session_date"])
+                          for item in session_rows
+                          if week_start.isoformat() <= item["session_date"] < week_end.isoformat()}
+        active = con.execute("SELECT routine_id,session_date FROM sessions WHERE completed_at IS NULL LIMIT 1").fetchone()
+
+    schedule = []
+    for candidate in sorted(candidates, key=lambda item: (item["weekday"], item["plan_position"], item["id"])):
+        scheduled_date = week_start + timedelta(days=candidate["weekday"] - 1)
+        completed = (candidate["id"], scheduled_date.isoformat()) in completed_week
+        status = "completed" if completed else "today" if scheduled_date == current else \
+            "missed" if scheduled_date < current else "upcoming"
+        schedule.append({**candidate, "scheduled_date": scheduled_date.isoformat(),
+                         "day_name": ("Montag", "Dienstag", "Mittwoch", "Donnerstag",
+                                      "Freitag", "Samstag", "Sonntag")[candidate["weekday"] - 1],
+                         "status": status})
+
     next_routine = None
     if candidates:
-        next_routine = min(candidates, key=lambda item: (
-            (item["weekday"] - current.isoweekday()) % 7,
-            item["plan_position"], item["id"],
-        ))
+        ranked = []
+        for candidate in candidates:
+            offset = (candidate["weekday"] - current.isoweekday()) % 7
+            completed_today = (candidate["id"], current.isoformat()) in completed_week
+            if offset == 0 and completed_today and not (active and active["routine_id"] == candidate["id"]):
+                offset = 7
+            ranked.append((offset, candidate["plan_position"], candidate["id"], candidate))
+        next_routine = dict(min(ranked, key=lambda item: item[:3])[3])
+        next_routine["days_until"] = min(ranked, key=lambda item: item[:3])[0]
+
+    progress = progress_data(current)
+    latest_comparison = None
+    highlights = []
+    if recent_sessions:
+        latest = recent_sessions[0]
+        routine_progress = next((item for item in progress["routines"]
+                                 if item["id"] == latest["routine_id"]), None)
+        if routine_progress:
+            previous = routine_progress["previous"]
+            latest_comparison = {
+                "routine_id": routine_progress["id"], "routine_name": routine_progress["name"],
+                "session_date": latest["session_date"],
+                "previous_date": previous["session_date"] if previous else None,
+                "sets": latest["sets"], "reps": latest["reps"], "volume": latest["volume"],
+                "duration_minutes": latest["duration_minutes"],
+                "volume_pct": routine_progress["change"]["volume_pct"],
+                "reps_delta": routine_progress["change"]["reps_delta"],
+            }
+            for exercise in routine_progress["exercises"]:
+                change = exercise["change"]
+                if change["status"] != "improved":
+                    continue
+                if change["best_weight_delta_kg"] and change["best_weight_delta_kg"] > 0:
+                    kind, value = "weight", change["best_weight_delta_kg"]
+                elif change["reps_delta"] and change["reps_delta"] > 0:
+                    kind, value = "reps", change["reps_delta"]
+                else:
+                    kind, value = "volume", change["volume_pct"]
+                highlights.append({"exercise_id": exercise["exercise_id"],
+                                   "exercise_name": exercise["name"], "kind": kind,
+                                   "value": value, "latest": exercise["latest"]})
+            highlights = highlights[:3]
+
     return {"date": current.isoformat(), "totals": totals, "this_week": this_week,
-            "next_routine": next_routine, "weekly_volume": buckets,
-            "recent_sessions": recent_sessions}
+            "week_adherence": {"completed": sum(item["status"] == "completed" for item in schedule),
+                               "planned": len(schedule)},
+            "week_schedule": schedule, "next_routine": next_routine,
+            "weekly_volume": buckets, "recent_sessions": recent_sessions,
+            "latest_comparison": latest_comparison, "highlights": highlights}
 
 
 def onboarding_sequence(answers: dict[str, str]) -> list[str]:
@@ -1062,6 +1285,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(today_data(routine_id))
                 if parsed.path=="/api/plan": return self.send_json(plan())
                 if parsed.path=="/api/overview": return self.send_json(overview_data())
+                if parsed.path=="/api/progress": return self.send_json(progress_data())
             except (sqlite3.Error,ValueError) as exc: return self.send_json({"error":str(exc)},400)
             return self.send_json({"error":"not found"},404)
         self.serve_static(parsed.path)
