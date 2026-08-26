@@ -756,37 +756,37 @@ const swContext = vm.createContext({
   },
 });
 vm.runInContext(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), swContext);
-assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v30/);
+assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /gympilot-shell-v32/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /['"]\/theme\.js['"]/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /apple-touch-icon-v20\.png/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /icon-512-v20\.png/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /['"]\/favicon\.ico['"]/);
 assert.match(fs.readFileSync('skills/gym/assets/web/service-worker.js', 'utf8'), /cache:\s*['"]reload['"]/);
 assert.equal(typeof fetchHandler, 'function');
-let responsePromise;
+let apiRespondWithCalled = false;
 fetchHandler({
   request: {url: 'http://' + '127.0.0.1:8765/api/today', method: 'GET'},
-  respondWith(promise) { responsePromise = promise; },
+  respondWith() { apiRespondWithCalled = true; },
 });
-await responsePromise;
-assert.equal(fetchOptions.cache, 'no-store');
+assert.equal(apiRespondWithCalled, false);
+assert.equal(fetchOptions, undefined);
 assert.equal(cacheTouched, false);
 
 for (const mode of ['navigate', 'same-origin']) {
   cacheTouched = false;
   fetchOptions = undefined;
-  let installResponse;
+  let installRespondWithCalled = false;
   fetchHandler({
     request: {
       url: 'http://' + '127.0.0.1:8765/install/GymPilot-WebClip.mobileconfig',
       method: 'GET',
       mode,
     },
-    respondWith(promise) { installResponse = promise; },
+    respondWith() { installRespondWithCalled = true; },
   });
-  assert.equal(await installResponse, networkResponse);
-  assert.equal(fetchOptions.cache, 'no-store');
-  assert.equal(cacheTouched, false, `install request in ${mode} mode must bypass Cache Storage`);
+  assert.equal(installRespondWithCalled, false);
+  assert.equal(fetchOptions, undefined);
+  assert.equal(cacheTouched, false, `install request in ${mode} mode must bypass the service worker`);
 }
 
 let privatePathResponse;
@@ -863,5 +863,6 @@ for (const iconPath of [
   const png = fs.readFileSync(iconPath);
   assert.equal(png.readUInt8(25), 2, `${iconPath} must be an opaque RGB PNG`);
 }
+
 
 console.log('web runtime: cockpit navigation, comparison cards, charts, history, units, and API cache bypass ok');

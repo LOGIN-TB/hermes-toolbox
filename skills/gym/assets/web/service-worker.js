@@ -1,4 +1,4 @@
-const CACHE = 'gympilot-shell-v30';
+const CACHE = 'gympilot-shell-v32';
 const PRIVATE_CACHE = 'gympilot-private-dashboard-v3';
 const SHELL = [
   '/',
@@ -44,11 +44,14 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (url.pathname.startsWith('/api/')) {
-    event.respondWith(fetch(event.request, {cache: 'no-store'}));
+    // Let Safari/WebKit use its native network path. Service-worker-managed
+    // API requests can remain broken after VPN or network transitions even
+    // when a direct page request to the same origin works.
     return;
   }
   if (url.origin === location.origin && url.pathname.startsWith('/install/')) {
-    event.respondWith(fetch(event.request, {cache: 'no-store'}));
+    // Profile downloads and recovery pages must also use Safari's native
+    // network path so they remain reachable after network transitions.
     return;
   }
   if (event.request.method !== 'GET' || url.origin !== location.origin) return;

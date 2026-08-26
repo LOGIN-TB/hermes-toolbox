@@ -1556,7 +1556,12 @@ class GymPilotTest(unittest.TestCase):
             sw = response.read().decode()
             self.assertNotIn("/api/", json.loads((WEB / "manifest.webmanifest").read_text()).get("icons", []))
             self.assertIn("pathname.startsWith('/api/')", sw)
-            self.assertIn("cache: 'no-store'", sw)
+            api_branch = sw.split("if (url.pathname.startsWith('/api/')) {", 1)[1].split("}", 1)[0]
+            self.assertNotIn("respondWith", api_branch)
+            self.assertNotIn("fetch(", api_branch)
+            install_branch = sw.split("if (url.origin === location.origin && url.pathname.startsWith('/install/')) {", 1)[1].split("}", 1)[0]
+            self.assertNotIn("respondWith", install_branch)
+            self.assertNotIn("fetch(", install_branch)
             self.assertNotIn("/api/today", sw.split("SHELL=", 1)[-1].split(";", 1)[0])
             icon_path = WEB / "apple-touch-icon-v20.png"
             conn.request("HEAD", "/apple-touch-icon-v20.png")
@@ -1601,6 +1606,7 @@ class GymPilotTest(unittest.TestCase):
         self.assertIn("current_sets", app)
         self.assertIn("data-view", index)
         self.assertIn("apple-touch-icon", index)
+
 
     def test_iphone_installation_documentation_covers_verified_webclip_flow(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
