@@ -70,6 +70,7 @@ EXPECTED_SKILLS = {
     "lead-magnets": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
     "marketing-ideas": ("curated-document", "de", "coreyhaines31/marketingskills", COREY_COMMIT, COREY_AUTHOR),
     "vermenschlichen": ("curated-document", "de", "LOGIN-TB/claude-skills", LOGIN_COMMIT, "LOGIN-TB; Hermes-curated adaptation"),
+    "zustellbarkeit": ("application", "de", "LOGIN-TB/hermes-toolbox", None, "LOGIN-TB contributors"),
 }
 GERMAN_CURATED_SKILLS = {
     name for name, (kind, _language, origin, _commit, _author) in EXPECTED_SKILLS.items()

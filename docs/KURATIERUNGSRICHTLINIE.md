@@ -4,7 +4,7 @@
 
 Hermes Toolbox veröffentlicht stark kuratierte Bearbeitungen frei lizenzierter Skills. Die deutschen Fassungen sind weder wörtliche Übersetzungen noch offizielle Ausgaben der ursprünglichen Projekte. Sie verbinden die fachliche Substanz des fixierten Upstreams mit einer einheitlichen deutschen Agentenführung, konservativen Aktionsgrenzen und einem gekennzeichneten Deutschland-/DACH-Kontext.
 
-Diese Richtlinie gilt für `ai-seo`, `seo-audit`, `product-marketing`, `social`, `cold-email`, `competitors`, `competitor-profiling`, `content-strategy`, `copywriting`, `customer-research`, `image`, `lead-magnets` und `marketing-ideas`. `gym` ist eine eigenentwickelte Anwendung. `vermenschlichen` stammt aus einem anderen Upstream und bleibt eine gesondert kuratierte deutsche Fassung.
+Diese Richtlinie gilt für `ai-seo`, `seo-audit`, `product-marketing`, `social`, `cold-email`, `competitors`, `competitor-profiling`, `content-strategy`, `copywriting`, `customer-research`, `image`, `lead-magnets` und `marketing-ideas`. `gym` und `zustellbarkeit` sind eigenentwickelte Anwendungen. `vermenschlichen` stammt aus einem anderen Upstream und bleibt eine gesondert kuratierte deutsche Fassung.
 
 ## Sprachstandard
 
