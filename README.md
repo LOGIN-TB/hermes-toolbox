@@ -29,6 +29,7 @@ Die kuratierten Fassungen sind keine unveränderten Upstream-Kopien und keine of
 | [`lead-magnets`](skills/lead-magnets/SKILL.md) | datenschutzbewusste Lead-Magnet-Konzepte | DE | nein |
 | [`marketing-ideas`](skills/marketing-ideas/SKILL.md) | Marketinghypothesen und kontrollierte Experimente | DE | nein |
 | [`vermenschlichen`](skills/vermenschlichen/SKILL.md) | natürliche deutsche Textredaktion | DE | nein |
+| [`zustellbarkeit`](skills/zustellbarkeit/SKILL.md) | E-Mail-Entwürfe und empfangene Nachrichten auf Junk-Auslöser prüfen | DE | ja |
 | [`gym`](skills/gym/SKILL.md) | lokaler Trainingstracker GymPilot | DE | ja |
 
 Die Angabe `DE` beschreibt die Sprache der Agentenanweisung. Die Skills antworten grundsätzlich in der Sprache des Nutzers; bei einem deutschen Auftrag verwenden sie natürliches Standarddeutsch und beachten Anrede, Zielmedium und Markenstimme.
