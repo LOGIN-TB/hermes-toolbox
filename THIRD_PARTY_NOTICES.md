@@ -34,7 +34,7 @@ Die hier veröffentlichten Fassungen ergänzen insbesondere eine vollständige d
 Der Skill `vermenschlichen` wurde aus `LOGIN-TB/claude-skills` abgeleitet.
 
 - Upstream: <https://github.com/LOGIN-TB/claude-skills>
-- geprüfter Upstream-Commit: `ff74380f1f17ba35bcc785bef74fa881a1c5f155`
+- geprüfter Upstream-Commit: `e80bcfdb34dee7cc94265fc8ce54f156f440e4c8`
 - Upstream-Lizenz: MIT
 - vollständiger geprüfter Lizenztext: [`licenses/login-tb-claude-skills-MIT.txt`](licenses/login-tb-claude-skills-MIT.txt)
 - Copyright laut Upstream-Lizenz: `Copyright (c) 2026 LOGIN`

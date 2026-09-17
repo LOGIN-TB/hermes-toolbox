@@ -1,14 +1,14 @@
 ---
 name: vermenschlichen
-description: "Use when polishing German prose without changing facts."
-version: 1.0.0-hermes.1
+description: "Use when polishing German prose without changing facts. Distinguish natural style, AI detection, text watermarks and C2PA provenance; never promise undetectability."
+version: 1.1.0-hermes.1
 author: LOGIN-TB; Hermes-curated adaptation
 license: MIT
 metadata:
   hermes:
     tags: [german, writing, editing, humanize, style]
     homepage: https://github.com/LOGIN-TB/claude-skills/tree/main/skills/vermenschlichen
-    upstream_commit: ff74380f1f17ba35bcc785bef74fa881a1c5f155
+    upstream_commit: e80bcfdb34dee7cc94265fc8ce54f156f440e4c8
     related_skills: [humanizer]
 ---
 
@@ -23,6 +23,22 @@ Nutze den Skill, wenn der Nutzer einen deutschen Text vermenschlichen, entkünst
 Die konkrete Nutzeranweisung, das Zielmedium, ein bereitgestelltes Sprachmuster, fachliche Konventionen, Zitierrichtlinien, Markenstimme und Barrierefreiheitsanforderungen haben Vorrang vor allgemeinen Stilheuristiken. Werbesprache ist nicht automatisch falsch, wenn ausdrücklich Werbetext gewünscht ist. Akademische, juristische, technische oder behördliche Texte dürfen sachbedingt förmlich und strukturiert sein.
 
 Der Skill ist kein KI-Detektor. Kein einzelnes Merkmal und auch keine Häufung beweist maschinelle Urheberschaft. Ziel ist bessere Prosa, nicht die Verschleierung der Herkunft oder die Umgehung von Prüfverfahren. Bestehende Offenlegungs-, Prüfungs-, Schul- oder Publikationspflichten bleiben bestehen.
+
+## Natürlichkeit, KI-Erkennung und Herkunft
+
+Unterscheide sprachliche Auffälligkeiten, statistische Einschätzungen eines KI-Detektors und technische Herkunftskennzeichen. Eine Stilprüfung ist kein Herkunftstest.
+
+- Überarbeite für Leser, nicht für einen Detektorwert. Versprich weder „nicht als KI erkennbar“ noch „wasserzeichenfrei“; eine sprachliche Überarbeitung belegt beides nicht.
+- Stärke die persönliche Stimme durch freigegebene Sprachproben, echte Einschätzungen und konkrete Angaben des Verfassers. Erfinde keine Erlebnisse und baue keine künstlichen Fehler ein.
+- Entferne unbeabsichtigte Formatierungs- und Zitierartefakte, ohne dies als Entfernung eines Wasserzeichens darzustellen. Erhalte funktionale Zeichen, Quellen und erforderliche Offenlegungen. Entferne oder verfälsche Herkunftskennzeichen nicht zur Täuschung über den Bearbeitungsweg.
+- Behandle KI-Bearbeitung nicht als Beweis vollständig maschineller Urheberschaft: Auch Korrekturlesen oder Übersetzen kann gekennzeichnete Ausgaben erzeugen. Ein fehlendes Kennzeichen beweist keine menschliche Herkunft.
+- Prüfe bei konkreten Fragen die aktuelle Anbieterdokumentation. Übertrage Claude-Aussagen nicht ungeprüft auf andere Modelle. Leite aus Anbieterpflichten keine pauschale Kennzeichnungspflicht für jeden Beitrag ab.
+
+Laut [Anthropics Dokumentation](https://support.claude.com/en/articles/16266773-how-claude-marks-ai-generated-content), geprüft am 17. September 2026, verwendet Claude eingebettete Textwasserzeichen bei unterstützten Modellen und signierte Content Credentials (C2PA) bei unterstützten Dateien. Textkennzeichnung erfolgt auf Modellebene, betrifft auch API und Claude Code und kann Kopieren sowie manche Bearbeitungen überstehen. C2PA beschreibt Herkunft beziehungsweise Verarbeitung, nicht automatisch die Urheberschaft sämtlicher Inhalte.
+
+Die technische Umsetzung des Textwasserzeichens wird dort nicht offengelegt. Behaupte nicht, es bestehe aus bestimmten Wörtern oder unsichtbaren Unicode-Zeichen, und versprich keine zuverlässige Entfernung durch Umformulieren oder Klartext-Export. Modellabdeckung und Erkennungszugang vor aktuellen Aussagen erneut prüfen.
+
+Abschlusskriterium: Der Text ist sachlich korrekt, natürlich und mediumgerecht; Herkunftsaussagen sind belegt, und es wird keine Nichterkennbarkeit behauptet.
 
 ## Unverrückbare Regeln
 

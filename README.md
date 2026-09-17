@@ -28,11 +28,15 @@ Die kuratierten Fassungen sind keine unveränderten Upstream-Kopien und keine of
 | [`image`](skills/image/SKILL.md) | sichere Planung und Bearbeitung von Bildern | DE | nein |
 | [`lead-magnets`](skills/lead-magnets/SKILL.md) | datenschutzbewusste Lead-Magnet-Konzepte | DE | nein |
 | [`marketing-ideas`](skills/marketing-ideas/SKILL.md) | Marketinghypothesen und kontrollierte Experimente | DE | nein |
-| [`vermenschlichen`](skills/vermenschlichen/SKILL.md) | natürliche deutsche Textredaktion | DE | nein |
+| [`vermenschlichen`](skills/vermenschlichen/SKILL.md) | natürliche deutsche Textredaktion; Stil, KI-Erkennung und Herkunftskennzeichen unterscheiden | DE | nein |
 | [`zustellbarkeit`](skills/zustellbarkeit/SKILL.md) | E-Mail-Entwürfe und empfangene Nachrichten auf Junk-Auslöser prüfen | DE | ja |
 | [`gym`](skills/gym/SKILL.md) | lokaler Trainingstracker GymPilot | DE | ja |
 
 Die Angabe `DE` beschreibt die Sprache der Agentenanweisung. Die Skills antworten grundsätzlich in der Sprache des Nutzers; bei einem deutschen Auftrag verwenden sie natürliches Standarddeutsch und beachten Anrede, Zielmedium und Markenstimme.
+
+## Vermenschlichen: Version 1.1.0-hermes.1
+
+Der Skill unterscheidet sprachliche Auffälligkeiten, statistische KI-Detektoren und technische Herkunftskennzeichen. Er erklärt die Grenzen von Claudes Textwasserzeichen und C2PA anhand der Anbieterdokumentation. Ziel bleibt natürliche, faktengetreue deutsche Prosa mit erhaltener persönlicher Stimme – ohne Versprechen von Nichterkennbarkeit oder Wasserzeichenfreiheit. Die zusätzlichen Hermes-Regeln für Datenschutz, Quellen, Freigaben und unveränderte Fakten bleiben erhalten.
 
 ## Installation
 

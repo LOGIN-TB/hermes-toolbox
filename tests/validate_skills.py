@@ -52,7 +52,7 @@ ALLOWED_LANGUAGES = {"de", "en"}
 CATALOG_KEYS = {"schema_version", "skills"}
 ENTRY_KEYS = {"name", "kind", "language", "origin", "upstream_commit", "author"}
 COREY_COMMIT = "7868cb9251fad80a73d26e488a5ad5f6c4a9f335"
-LOGIN_COMMIT = "ff74380f1f17ba35bcc785bef74fa881a1c5f155"
+LOGIN_COMMIT = "e80bcfdb34dee7cc94265fc8ce54f156f440e4c8"
 COREY_AUTHOR = "Corey Haines; Hermes-curated adaptation"
 EXPECTED_SKILLS = {
     "gym": ("application", "de", "LOGIN-TB/hermes-toolbox", None, "LOGIN-TB contributors"),
