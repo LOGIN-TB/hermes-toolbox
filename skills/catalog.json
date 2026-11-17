@@ -117,7 +117,7 @@
       "kind": "curated-document",
       "language": "de",
       "origin": "LOGIN-TB/claude-skills",
-      "upstream_commit": "e80bcfdb34dee7cc94265fc8ce54f156f440e4c8",
+      "upstream_commit": "471a7a2273f77c43ddab6910a15cba6807ff6229",
       "author": "LOGIN-TB; Hermes-curated adaptation"
     },
     {

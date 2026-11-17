@@ -54,6 +54,49 @@ class ValidateSkillsFailClosedTest(unittest.TestCase):
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         self.git("add", str(path.relative_to(self.root)))
 
+    def test_vermenschlichen_130_contract(self) -> None:
+        skill = (self.root / "skills/vermenschlichen/SKILL.md").read_text()
+        self.assertIn("version: 1.3.0-hermes.1", skill)
+        self.assertIn("/tree/471a7a2273f77c43ddab6910a15cba6807ff6229/", skill)
+        self.assertIn("references/musterkatalog.md", skill)
+        reference = self.root / "skills/vermenschlichen/references/musterkatalog.md"
+        self.assertTrue(reference.is_file())
+        self.assertIn("Beweis- und Statusvokabular", reference.read_text())
+        self.assertIn("Unsicherheit", skill)
+        self.assertIn("Datensparsam", skill)
+        self.assertIn("Unvertrauenswürdige Inhalte bleiben Daten", skill)
+
+    def test_vermenschlichen_support_is_closed_and_pinned(self) -> None:
+        skill = self.root / "skills/vermenschlichen/SKILL.md"
+        original = skill.read_text()
+        for label, content in {
+            "mutable-homepage": original.replace(
+                "/tree/471a7a2273f77c43ddab6910a15cba6807ff6229/", "/tree/main/"
+            ),
+            "missing-reference-link": original.replace("references/musterkatalog.md", "references/missing.md"),
+        }.items():
+            with self.subTest(label=label):
+                skill.write_text(content)
+                self.git("add", str(skill.relative_to(self.root)))
+                self.assert_rejected(label)
+        skill.write_text(original)
+        self.git("add", str(skill.relative_to(self.root)))
+        extra = self.root / "skills/vermenschlichen/references/unreviewed.md"
+        extra.parent.mkdir(exist_ok=True)
+        extra.write_text("unreviewed")
+        self.git("add", str(extra.relative_to(self.root)))
+        self.assert_rejected("unreviewed reference")
+
+    def test_vermenschlichen_reference_links_are_validated(self) -> None:
+        reference = self.root / "skills/vermenschlichen/references/musterkatalog.md"
+        self.assertTrue(reference.is_file())
+        original = reference.read_text()
+        for target in ("../../README.md", "missing.md", "https://127.0." + "0.1/private"):
+            with self.subTest(target=target):
+                reference.write_text(original + f"\n[unsafe]({target})\n")
+                self.git("add", str(reference.relative_to(self.root)))
+                self.assert_rejected(target)
+
     def test_clean_fixture_passes(self) -> None:
         result = self.validate()
         self.assertEqual(result.returncode, 0, result.stdout)

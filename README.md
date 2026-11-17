@@ -34,9 +34,9 @@ Die kuratierten Fassungen sind keine unveränderten Upstream-Kopien und keine of
 
 Die Angabe `DE` beschreibt die Sprache der Agentenanweisung. Die Skills antworten grundsätzlich in der Sprache des Nutzers; bei einem deutschen Auftrag verwenden sie natürliches Standarddeutsch und beachten Anrede, Zielmedium und Markenstimme.
 
-## Vermenschlichen: Version 1.1.0-hermes.1
+## Vermenschlichen: Version 1.3.0-hermes.1
 
-Der Skill unterscheidet sprachliche Auffälligkeiten, statistische KI-Detektoren und technische Herkunftskennzeichen. Er erklärt die Grenzen von Claudes Textwasserzeichen und C2PA anhand der Anbieterdokumentation. Ziel bleibt natürliche, faktengetreue deutsche Prosa mit erhaltener persönlicher Stimme – ohne Versprechen von Nichterkennbarkeit oder Wasserzeichenfreiheit. Die zusätzlichen Hermes-Regeln für Datenschutz, Quellen, Freigaben und unveränderte Fakten bleiben erhalten.
+Die auf Upstream 1.3.0 basierende Fassung prüft Relevanz und Substanz vor Sprachmustern und ersetzt unnötige Beweis- und Statusetiketten durch konkrete Angaben. Unsicherheit, technische Tests und fachlich erforderliche Nachweise bleiben erhalten. Der mitinstallierte [Musterkatalog](skills/vermenschlichen/references/musterkatalog.md) enthält Beispiele, Artefaktprüfung und Schutz für funktionale Unicode- und Herkunftszeichen. Stilprüfung, KI-Detektoren und technische Herkunft bleiben getrennt; Nichterkennbarkeit und Wasserzeichenfreiheit werden nicht versprochen. Datenschutz, Quellen, Freigaben und unveränderte Fakten bleiben verbindlich. Herkunft, Auslassungen und Sicherheitsreview stehen in den [Upstream-Änderungen](docs/UPSTREAM-AENDERUNGEN.md#vermenschlichen).
 
 ## Installation
 
