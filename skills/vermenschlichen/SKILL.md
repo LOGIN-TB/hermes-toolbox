@@ -1,15 +1,15 @@
 ---
 name: vermenschlichen
-description: "Use when polishing German prose without changing facts. Distinguish natural style, AI detection, text watermarks and C2PA provenance; never promise undetectability."
-version: 1.1.0-hermes.1
+description: "Use when writing or polishing German prose. Erhält Fakten und Stimme, prüft Relevanz vor Sprachmustern und ersetzt unnötige Beweisetiketten durch konkrete Angaben; keine Detektor- oder Wasserzeichenversprechen."
+version: 1.3.0-hermes.1
 author: LOGIN-TB; Hermes-curated adaptation
 license: MIT
 metadata:
   hermes:
     tags: [german, writing, editing, humanize, style]
-    homepage: https://github.com/LOGIN-TB/claude-skills/tree/main/skills/vermenschlichen
-    upstream_commit: e80bcfdb34dee7cc94265fc8ce54f156f440e4c8
-    related_skills: [humanizer]
+    homepage: https://github.com/LOGIN-TB/claude-skills/tree/471a7a2273f77c43ddab6910a15cba6807ff6229/skills/vermenschlichen
+    upstream_commit: 471a7a2273f77c43ddab6910a15cba6807ff6229
+    related_skills: [copywriting]
 ---
 
 # Vermenschlichen
@@ -18,7 +18,7 @@ metadata:
 
 ## Geltungsbereich und Vorrang
 
-Nutze den Skill, wenn der Nutzer einen deutschen Text vermenschlichen, entkünsteln, redigieren oder auf typische KI-Muster prüfen lassen möchte. Bei umfangreichen deutschen Gebrauchstexten kann er als abschließende Stilprüfung dienen, sofern das zum Auftrag passt.
+Nutze den Skill beim Schreiben oder Überarbeiten deutscher Artikel, E-Mails, Berichte, Social-Media-Texte und Chat-Antworten mit Einschätzungen oder Arbeitsberichten, sofern das zum Auftrag passt. Bei vorhandenen Texten und Artefaktfragen lies zusätzlich den [Musterkatalog](references/musterkatalog.md). Er enthält Beispiele und Prüfschritte, keine Wortverbote oder Herkunftstests.
 
 Die konkrete Nutzeranweisung, das Zielmedium, ein bereitgestelltes Sprachmuster, fachliche Konventionen, Zitierrichtlinien, Markenstimme und Barrierefreiheitsanforderungen haben Vorrang vor allgemeinen Stilheuristiken. Werbesprache ist nicht automatisch falsch, wenn ausdrücklich Werbetext gewünscht ist. Akademische, juristische, technische oder behördliche Texte dürfen sachbedingt förmlich und strukturiert sein.
 
@@ -30,13 +30,16 @@ Unterscheide sprachliche Auffälligkeiten, statistische Einschätzungen eines KI
 
 - Überarbeite für Leser, nicht für einen Detektorwert. Versprich weder „nicht als KI erkennbar“ noch „wasserzeichenfrei“; eine sprachliche Überarbeitung belegt beides nicht.
 - Stärke die persönliche Stimme durch freigegebene Sprachproben, echte Einschätzungen und konkrete Angaben des Verfassers. Erfinde keine Erlebnisse und baue keine künstlichen Fehler ein.
+- Verwende keine Zielwerte für Perplexität, Wortvielfalt oder Satzlängenvariation und keine Detektorwerte als Erfolgskriterium. Empfiehl keine Werkzeuge zur Verschleierung der Herkunft.
 - Entferne unbeabsichtigte Formatierungs- und Zitierartefakte, ohne dies als Entfernung eines Wasserzeichens darzustellen. Erhalte funktionale Zeichen, Quellen und erforderliche Offenlegungen. Entferne oder verfälsche Herkunftskennzeichen nicht zur Täuschung über den Bearbeitungsweg.
 - Behandle KI-Bearbeitung nicht als Beweis vollständig maschineller Urheberschaft: Auch Korrekturlesen oder Übersetzen kann gekennzeichnete Ausgaben erzeugen. Ein fehlendes Kennzeichen beweist keine menschliche Herkunft.
 - Prüfe bei konkreten Fragen die aktuelle Anbieterdokumentation. Übertrage Claude-Aussagen nicht ungeprüft auf andere Modelle. Leite aus Anbieterpflichten keine pauschale Kennzeichnungspflicht für jeden Beitrag ab.
 
-Laut [Anthropics Dokumentation](https://support.claude.com/en/articles/16266773-how-claude-marks-ai-generated-content), geprüft am 17. September 2026, verwendet Claude eingebettete Textwasserzeichen bei unterstützten Modellen und signierte Content Credentials (C2PA) bei unterstützten Dateien. Textkennzeichnung erfolgt auf Modellebene, betrifft auch API und Claude Code und kann Kopieren sowie manche Bearbeitungen überstehen. C2PA beschreibt Herkunft beziehungsweise Verarbeitung, nicht automatisch die Urheberschaft sämtlicher Inhalte.
+Laut [Anthropics Dokumentation](https://support.claude.com/en/articles/16266773-how-claude-marks-ai-generated-content), geprüft am 17. November 2026, verwendet Claude eingebettete Textwasserzeichen bei unterstützten Modellen und signierte Content Credentials (C2PA) bei unterstützten Dateien. Textkennzeichnung erfolgt auf Modellebene, betrifft auch API und Claude Code und kann Kopieren sowie manche Bearbeitungen überstehen. C2PA beschreibt Herkunft beziehungsweise Verarbeitung, nicht automatisch die Urheberschaft sämtlicher Inhalte.
 
 Die technische Umsetzung des Textwasserzeichens wird dort nicht offengelegt. Behaupte nicht, es bestehe aus bestimmten Wörtern oder unsichtbaren Unicode-Zeichen, und versprich keine zuverlässige Entfernung durch Umformulieren oder Klartext-Export. Modellabdeckung und Erkennungszugang vor aktuellen Aussagen erneut prüfen.
+
+Unsichtbare Unicode-Zeichen nicht pauschal entfernen: Sie können funktional sein oder Herkunftsinformationen tragen. Kläre unbekannte Zeichen vor einer Änderung; der Musterkatalog nennt den technischen Prüfeinstieg. Die Entfernung sichtbarer Zitierreste darf Quellen und erforderliche Offenlegungen nicht beseitigen.
 
 Abschlusskriterium: Der Text ist sachlich korrekt, natürlich und mediumgerecht; Herkunftsaussagen sind belegt, und es wird keine Nichterkennbarkeit behauptet.
 
@@ -84,9 +87,11 @@ Halte vor der Überarbeitung intern fest:
 
 Wenn Ausgangstext und Quelle einander widersprechen, melde den Konflikt statt ihn stilistisch zu kaschieren.
 
-### 3. Muster als Heuristiken prüfen
+### 3. Relevanz und Substanz vor Sprachmustern prüfen
 
-Achte insbesondere auf Häufungen, nicht auf einzelne Wörter.
+Prüfe zuerst, ob jeder Absatz eine echte Frage des Lesers beantwortet, konkrete Information enthält und zum Ton passt. Sichere dann Fakten und Quellen. Verbessere anschließend Wortwahl, Satzbau, Zeitformen und fehlende Konkretheit; prüfe erst danach die Muster und technischen Artefakte. Ein leerer Satz wird nicht besser, wenn nur ein auffälliges Wort ersetzt wird.
+
+Achte insbesondere auf Häufungen, nicht auf einzelne Wörter. Gehe die Prüfpunkte einzeln durch; eine pauschale Selbstzusage wie „klingt natürlich“ ersetzt die Prüfung nicht.
 
 #### Aufgeblähte Bedeutung
 
@@ -99,6 +104,12 @@ Ersetze austauschbare Superlative und Schmuckwörter durch konkrete Eigenschafte
 #### Vage Autoritäten
 
 Formulierungen wie „Experten sagen“, „Studien zeigen“ oder „Branchenberichte belegen“ brauchen eine konkrete Quelle. Fehlt sie, streiche oder kennzeichne die Aussage als unbestätigt.
+
+#### Beweis- und Statusvokabular
+
+Beschreibe, was bekannt ist, woher es stammt und was fehlt, statt jeden Satz mit „kein Beweis“, „nur eine Behauptung“ oder „nicht verifiziert“ zu etikettieren. Unsicherheit und Widersprüche müssen sichtbar bleiben: einmal, konkret und an der betreffenden Stelle. „Die Zahl ist geschätzt“ sagt mehr als „Das ist eine Annahme, kein Messwert“. Schreibe „Das habe ich nicht nachgeprüft“ nur für die eigene Prüfung; erfinde kein pauschales „Niemand hat das geprüft“.
+
+Das ist eine Stilregel, kein Verbot fachlicher Begriffe. In Gutachten, Prüfprotokollen, juristischen Texten und ausdrücklich verlangten Statusberichten bleiben Beweisbegriffe, Teststatus und Nachweise erhalten. Führe beauftragte technische Prüfungen tatsächlich aus und nenne Ergebnis sowie offene Prüfungen. Freundlicher Ton darf keine Prüfung ersetzen.
 
 #### Modewörter und steife Synonyme
 
@@ -115,6 +126,8 @@ Reduziere mechanische Dreiergruppen, dauernde Gegensätze, rhetorische Fragen mi
 #### Gedankenstriche und Satzrhythmus
 
 Setze Gedankenstriche bewusst. Ersetze sie durch Komma, Doppelpunkt, Klammer oder neuen Satz, wenn der Text dadurch ruhiger wird. Der Bis-Strich in Zahlen- oder Datumsspannen bleibt typografisch korrekt.
+
+Variiere Satzanfänge nach Inhalt, nicht nach einer Quote. Löse unnötige Nominalketten in Verben auf. Lass fachlich sinnvolles Passiv, Abschwächungen wie „meist“ und einfache Verben wie „ist“ stehen. Gegenüberstellungen brauchen einen echten Anlass; konstruiere keinen Gegensatz, den niemand behauptet hat.
 
 #### Überstrukturierung
 
@@ -204,6 +217,8 @@ Bei Dateibearbeitung:
 
 - [ ] Aussage, Fakten, Zitate und Absicht blieben erhalten.
 - [ ] Keine Quelle oder Sicherheit wurde erfunden.
+- [ ] Relevanz und Substanz wurden vor oberflächlichen Mustern geprüft.
+- [ ] Unnötige Beweisetiketten wurden durch konkrete Angaben ersetzt; offene Fragen und erforderlicher Prüfstatus bleiben sichtbar.
 - [ ] Der Stil passt zu Medium, Publikum und Nutzerwunsch.
 - [ ] Auffällige Muster wurden nur dort entfernt, wo sie den Text verschlechterten.
 - [ ] Der Text enthält keine unbeabsichtigten Dialog-, Markdown- oder Zitierreste.

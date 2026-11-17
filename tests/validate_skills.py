@@ -52,7 +52,7 @@ ALLOWED_LANGUAGES = {"de", "en"}
 CATALOG_KEYS = {"schema_version", "skills"}
 ENTRY_KEYS = {"name", "kind", "language", "origin", "upstream_commit", "author"}
 COREY_COMMIT = "7868cb9251fad80a73d26e488a5ad5f6c4a9f335"
-LOGIN_COMMIT = "e80bcfdb34dee7cc94265fc8ce54f156f440e4c8"
+LOGIN_COMMIT = "471a7a2273f77c43ddab6910a15cba6807ff6229"
 COREY_AUTHOR = "Corey Haines; Hermes-curated adaptation"
 EXPECTED_SKILLS = {
     "gym": ("application", "de", "LOGIN-TB/hermes-toolbox", None, "LOGIN-TB contributors"),
@@ -380,7 +380,8 @@ def validate() -> list[dict]:
                 fail(f"frontmatter metadata.hermes must be a mapping in {name}")
             if hermes_metadata.get("upstream_commit") != commit:
                 fail(f"frontmatter upstream commit differs from catalog for {name}")
-            if name in GERMAN_CURATED_SKILLS and hermes_metadata.get("homepage") != EXPECTED_HOMEPAGES[name]:
+            expected_homepage = f"https://github.com/{entry['origin']}/tree/{commit}/skills/{name}"
+            if hermes_metadata.get("homepage") != expected_homepage:
                 fail(f"frontmatter homepage differs from canonical upstream for {name}")
             if name in GERMAN_CURATED_SKILLS:
                 curation_entry = curation_by_name[name]
@@ -401,14 +402,33 @@ def validate() -> list[dict]:
                 if path.is_file()
                 and not any(part in {"__pycache__", ".pytest_cache"} for part in path.relative_to(skill_dir).parts)
             ]
-            if packaged_files != ["SKILL.md"]:
-                fail(f"curated document skill {name} may contain only SKILL.md: {packaged_files}")
+            expected_support = {"references/musterkatalog.md"} if name == "vermenschlichen" else set()
+            if set(packaged_files) != {"SKILL.md"} | expected_support:
+                fail(f"curated document skill {name} has missing or unreviewed files: {packaged_files}")
+            if name == "vermenschlichen" and version != "1.3.0-hermes.1":
+                fail("vermenschlichen must use version 1.3.0-hermes.1")
+            for support in expected_support:
+                reference = skill_dir / support
+                reference_text = reference.read_text(encoding="utf-8")
+                for target in relative_targets(reference_text):
+                    pure = PurePosixPath(target)
+                    resolved = reference.parent / pure
+                    if pure.is_absolute() or ".." in pure.parts or not resolved.is_file():
+                        fail(f"unsafe or missing reference link {target!r} in {name}")
+                    if resolved.relative_to(skill_dir).as_posix() not in expected_support:
+                        fail(f"unreviewed reference target {target!r} in {name}")
+                nested_support = {
+                    match.group(1).rstrip(".,;:")
+                    for match in HERMES_SUPPORT_REF_RE.finditer(reference_text.replace("\\", "/"))
+                }
+                if not nested_support <= expected_support:
+                    fail(f"unreviewed inferred reference target in {name}")
             inferred_support = {
                 match.group(1).rstrip(".,;:")
                 for match in HERMES_SUPPORT_REF_RE.finditer(text.replace("\\", "/"))
             }
-            if inferred_support:
-                fail(f"curated document skill {name} triggers Hermes support-file inference: {sorted(inferred_support)}")
+            if inferred_support != expected_support:
+                fail(f"curated document skill {name} has unexpected Hermes support-file inference: {sorted(inferred_support)}")
 
         if PRIVATE_PATH_RE.search(text):
             fail(f"workstation-specific absolute path in {name}")
@@ -520,6 +540,16 @@ def smoke_with_hermes(entries: list[dict], hermes: str, base_url: str) -> None:
             installed_bytes = installed.read_bytes()
             if source_bytes != installed_bytes:
                 fail(f"installed bytes differ for {name}")
+            source_dir = SKILLS / name
+            for source in source_dir.rglob("*"):
+                if not source.is_file():
+                    continue
+                relative = source.relative_to(source_dir)
+                if any(part in {"__pycache__", ".pytest_cache"} for part in relative.parts):
+                    continue
+                target = installed.parent / relative
+                if target.is_symlink() or not target.is_file() or target.read_bytes() != source.read_bytes():
+                    fail(f"installed support bytes differ or are missing for {name}: {relative}")
             digest = hashlib.sha256(source_bytes).hexdigest()
             print(f"hermes_smoke={name} sha256={digest}")
 
